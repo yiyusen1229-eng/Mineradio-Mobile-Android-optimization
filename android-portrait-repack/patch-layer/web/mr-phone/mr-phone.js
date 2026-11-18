@@ -265,14 +265,33 @@
     try { panel.style.setProperty('display', 'block', 'important'); } catch (e) { }
   }
 
+  /* v80：关面板先播 180ms 收起动画（淡出 + 下滑 + 轻微缩小），再真正清状态，
+     和开场的滑入对称，不再瞬间消失。动画期间 body.mr-diy-open 保留，
+     由 phone.css 的 .mr-diy-closing 规则驱动。 */
+  var DIY_CLOSE_MS = 200;
+  var diyCloseTimer = 0;
+  function cancelDiyClose() {
+    if (diyCloseTimer) { try { clearTimeout(diyCloseTimer); } catch (e) { } diyCloseTimer = 0; }
+    try { bodyEl().classList.remove('mr-diy-closing'); } catch (e) { }
+    var p = document.getElementById('fx-panel');
+    if (p) { try { p.classList.remove('mr-diy-closing'); } catch (e) { } }
+  }
+  function finishDiyClose() {
+    diyCloseTimer = 0;
+    try { bodyEl().classList.remove('mr-diy-open', 'mr-diy-closing'); } catch (e) { }
+    var panel = document.getElementById('fx-panel');
+    if (panel) { try { panel.classList.remove('show', 'peek', 'pinned', 'mr-diy-closing'); } catch (e) { } }
+    try { panelKbFit(); } catch (e) { }   /* 清掉键盘期的内联钉高 */
+  }
   function setDiyPanel(open) {
     var panel = document.getElementById('fx-panel');
     if (!panel) return;
-    window.__mrDiyOpen = !!open;
-    if (window.__mrDiyKeepTimer) { try { clearTimeout(window.__mrDiyKeepTimer); } catch (e) { } window.__mrDiyKeepTimer = 0; }
-    try { panel.classList.remove('closing'); } catch (e) { }
-    showDiyPanelEl(panel);
     if (open) {
+      cancelDiyClose();
+      window.__mrDiyOpen = true;
+      if (window.__mrDiyKeepTimer) { try { clearTimeout(window.__mrDiyKeepTimer); } catch (e) { } window.__mrDiyKeepTimer = 0; }
+      try { panel.classList.remove('closing'); } catch (e) { }
+      showDiyPanelEl(panel);
       /* v78：不再 250ms 轮询补 class（宿主不会删我们的 body class）。
          只在 500ms 后做一次复查，兜住宿主在开场瞬间的 auto-hide/auto-peek。 */
       try { bodyEl().classList.add('mr-diy-open'); } catch (e) { }
@@ -281,13 +300,17 @@
       if (fab) fab.classList.add('active');
       window.__mrDiyKeepTimer = window.setTimeout(keepDiyPanelOpen, 500);
       try { panelKbFit(); } catch (e) { }
-    } else {
-      try { bodyEl().classList.remove('mr-diy-open'); } catch (e) { }
-      panel.classList.remove('show', 'peek', 'pinned');
-      try { panelKbFit(); } catch (e) { }   /* 关面板时顺手清掉键盘期的内联钉高 */
-      var fab2 = document.getElementById('fx-fab');
-      if (fab2) fab2.classList.remove('active');
+      return;
     }
+    if (!window.__mrDiyOpen) return;          /* 已经关着（或正在播收起动画） */
+    window.__mrDiyOpen = false;
+    if (window.__mrDiyKeepTimer) { try { clearTimeout(window.__mrDiyKeepTimer); } catch (e) { } window.__mrDiyKeepTimer = 0; }
+    var fab2 = document.getElementById('fx-fab');
+    if (fab2) fab2.classList.remove('active');
+    try { bodyEl().classList.add('mr-diy-closing'); } catch (e) { }
+    panel.classList.add('mr-diy-closing');
+    try { panelKbFit(); } catch (e) { }
+    diyCloseTimer = window.setTimeout(finishDiyClose, DIY_CLOSE_MS);
   }
 
   function diyPanelOpen() {

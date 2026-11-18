@@ -151,3 +151,16 @@
 ### 8.3 键盘弹出时面板缩成小块
 
 点面板里的搜索框会弹软键盘，WebView 的布局视口从 870 变成 533，`top:31vh` + 底栏计算出的面板只剩 222px 高。加 `panelKbFit()`（监听 `visualViewport.resize` / `resize` / `focusin`/`focusout` + 500ms 调度器兜底）：键盘期间把面板钉成 `top=visTop+8 / height=可视高-16`，键盘收起立刻清掉内联、恢复 270/441。实测 8/517 ↔ 270/441 往返正常。
+---
+
+## 9. v80：DIY 面板收起动画（原来关闭是瞬间消失）
+
+**原因**：开/关都是 class 驱动——`setDiyPanel(false)` 直接 `body.classList.remove('mr-diy-open')`，关态规则里的 `opacity:0` 立即生效，所以没有过渡可播；用户看到的就是「开有滑入、关是硬切」。
+
+**改法（两段式关闭）**：
+1. `setDiyPanel(false)` 只标记 `__mrDiyOpen=false` + 加 `body.mr-diy-closing` / `panel.mr-diy-closing`，保留 `mr-diy-open`；
+2. CSS `.mr-diy-closing` 规则（特异性 1,3,1，追加在开态规则之后）：`opacity:0; transform:translateY(14px) scale(.99); transition: transform .18s cubic-bezier(.22,.9,.25,1), opacity .15s ease-out`；
+3. 200ms 后 `finishDiyClose()` 才清 `mr-diy-open` / `.peek` / closing；
+4. 动画中途再点 DIY：`cancelDiyClose()` 清定时器 + 移除 closing，面板从当前过渡状态平滑回弹。
+
+**验证**：screencast 逐帧（~50fps）面板区域亮度 19.7→26.0→27.4→28.6→29.7→31.3（5 帧连续收拢，无硬切），顶部搜索框/头像亮度 44.6/68.9 全程恒定（没有把 v78c/v79 修掉的闪帧带回来）；开/关/再开/动画中打断均正常，回归 23/23 PASS。

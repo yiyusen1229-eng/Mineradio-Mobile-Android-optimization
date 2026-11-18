@@ -1969,6 +1969,20 @@ body.phone-shell #search-stack{
 /* ================= V67 ================= */
 
 /* ① DIY 视觉控制台：手机层给面板补 display，否则点了只是加 class 但 display:none */
+/* v80：收起动画——开态规则之后追加，特异性 (1,3,1) 与开态持平、按顺序生效。
+   opacity 只在这里用一次（收起时配合不透明底色，避免淡出时文字变「鬼影」）。 */
+body.phone-shell.mr-diy-open.mr-diy-closing #fx-panel,
+body.phone-shell.mr-diy-open.mr-diy-closing #fx-panel.peek,
+body.phone-shell.mr-diy-open.mr-diy-closing #fx-panel.show{
+  opacity:0!important;
+  transform:translateY(14px) scale(.99)!important;
+  pointer-events:none!important;
+  /* 收起 = 淡出 + 下滑 + 轻微缩小（和开场的「滑入」同一套缓动）。
+     0.15s 淡出在 40fps 下约 5~6 帧，肉眼看是连续的收拢；
+     实测顶部搜索框/头像亮度全程无抖动（面板/顶部都是常驻合成层）。 */
+  transition:transform .18s cubic-bezier(.22,.9,.25,1), opacity .15s ease-out!important;
+}
+
 /* v79b：删除 .show/.peek/.pinned 的 display/visibility 复位（V78 开态规则已包含；关态另有 .peek/.show/.pinned 强制隐藏）。 */
 
 /* ② 搜索：外层暗底去掉后，结果面板本身给足不透明度 */
