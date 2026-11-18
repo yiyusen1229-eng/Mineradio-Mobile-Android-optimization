@@ -509,3 +509,45 @@ scroll（rAF 节流）里重新执行 `$ql.innerHTML = ...` → 所有 `.queue-i
 
 实测 computed：toolbar、tabs 都是 `bg rgba(9,12,16,.88)` / `blur(22px) saturate(1.6)` / `radius 14px`；
 壁纸不再透到文字上；回归 23/23 PASS。
+---
+
+## 23. v94：搜索/播放连接提速（酷狗优先）
+
+### 23.1 先量清楚
+| 项 | 实测 |
+|---|---|
+| 跨境首次连接（DNS+TCP+TLS） | 3594ms |
+| 复用连接 | 563~1062ms |
+| 3 请求并行 | 总耗时≈最慢者（2340ms），但单个被拖慢 2~4 倍（有竞争） |
+| 宿主搜索（等全部平台） | 首屏 5~12s |
+| `kugou/song/url` 单曲解析 | 7.1s |
+| 本地已缓存音频起播 | 0 次请求、秒开 |
+
+### 23.2 落地三项
+1. **酷狗优先渐进搜索**：包装 `fetchMusicSearchResults(q, mode, previousPages)`
+   - 非分页请求且 provider 列表含 kugou → 只先拿酷狗（6.5s 预算，空结果时带 `&mrrerun=<ts>` 重试一次）；
+   - 立即返回 `{songs, providerPages, hasMore}` → 宿主 `renderSongSearchResults` 先画出来；
+   - 其余平台后台并取（9s 预算），用 `mergeUniqueSearchSongPools` 合并 + `appendNextSearchResults(key)` 增量 append；
+   - 合并用 `mergeSongSearchResults(netease, qq, kugou, qishui, spotify, 60, q)`（注意签名只有 5 个平台 + limit + query）。
+2. **连接预热**：启动后 3.2s / 3.8s 分别对 `/api/kugou/search?limit=1`、`/api/search?limit=1` 发一次；
+   10 分钟内不重复；只建连接，不等待结果。
+3. **下一首预解析**：`playing`（AUDIO）事件后 2s 调 `resolveAlbumGaplessPlaybackData(playQueue[currentIdx+1])`，
+   它就是宿主构造 `/api/<provider>/song/url` 的同一个函数 → 请求 URL 一致 → 命中 v88 的 10 分钟 song/url 缓存。
+
+### 23.3 顺手修的缓存 bug
+v88 的搜索超时会返回哨兵 `{ok:false,error:'MR_SEARCH_TIMEOUT',songs:[]}`，被缓存层当正常结果存了下来，
+导致同一关键词**永远返回空结果**（本版复现：`linjunjie` 秒回 0 首）。修复：
+- 存储前 `isSentinelPayload(data)` 直接丢弃；
+- 读取时发现哨兵 → 删除并重新请求；
+- 旧脏数据换 DB 名丢弃（`mr-api-cache-v1` → `mr-api-cache-v2`）；
+- 渐进搜索拿不到酷狗结果时用 `&mrrerun=<ts>` 重试一次绕开历史缓存。
+
+### 23.4 实测结果
+- 搜索首条结果：**1.46s / 1.60s**（kugou 约 0.9~1.0s 返回后立即渲染），冷启动首次 2.9~3.4s；此前 5~12s；
+- 下一首：观测到 `song/url` 命中缓存（1ms），切歌不再等解析；
+- 回归 23/23 PASS。
+
+### 23.5 遗留
+- `kugou/song/like/check` 12~30s、歌词 3~4s 仍会在起播后占用连接（不阻塞出声，但拖慢后续图标/歌词）；
+- 冷启动偶发酷狗搜索 12s 不返回（跨境抖动），此时仍会走兜底；
+- 后续可做：喜欢状态/歌词预取延后到 idle、播放前预取封面/歌词、把 debug 计时面板做出来。

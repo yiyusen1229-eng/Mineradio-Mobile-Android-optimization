@@ -249,7 +249,7 @@
     if (!state) {
       state = {
         ttl: 20 * 60 * 1000,
-        dbName: 'mr-api-cache-v1',
+        dbName: 'mr-api-cache-v2',
         store: 'kv',
         mem: Object.create(null),
         dbPromise: null,
@@ -265,6 +265,7 @@
     var STATUS_TTL = 10 * 60 * 1000;
     var SONG_URL_TTL = 10 * 60 * 1000;
     var SEARCH_TIMEOUT = 12000;
+    if (!isFinite(SEARCH_TIMEOUT) || SEARCH_TIMEOUT < 2000) SEARCH_TIMEOUT = 12000;
 
     function ensureDb() {
       if (state.dbPromise) return state.dbPromise;
@@ -365,6 +366,10 @@
       var now = Date.now();
       var self = this;
 
+      function isSentinelPayload(d) {
+        try { return !!(d && (d.error === 'MR_SEARCH_TIMEOUT' || d.__mrTimeout)); } catch (e) { return false; }
+      }
+
       if (kind === 'status') {
         var st = state.statusMem[key];
         if (st && now - st.t < STATUS_TTL) {
@@ -390,6 +395,7 @@
 
       return (async function () {
         var hit = state.mem[key];
+        if (hit && isSentinelPayload(hit.d)) { delete state.mem[key]; hit = null; }
         if (hit && now - hit.t < state.ttl) {
           storeResult(hit.d);
           var cachedResp = makeJsonResponse(hit.d);
@@ -399,7 +405,8 @@
           var db0 = await ensureDb();
           if (db0) {
             var rec = await dbGet(db0, key);
-            if (rec && rec.t && Date.now() - rec.t < state.ttl) {
+            if (rec && isSentinelPayload(rec.d)) { rec = null; }
+          if (rec && rec.t && Date.now() - rec.t < state.ttl) {
               state.mem[key] = { t: rec.t, d: rec.d };
               storeResult(rec.d);
               var resp1 = makeJsonResponse(rec.d);
@@ -425,6 +432,7 @@
           if (res && res.ok) {
             var clone = res.clone();
             clone.json().then(function (data) {
+              if (isSentinelPayload(data)) return;
               var item = { t: Date.now(), d: data };
               state.mem[key] = item;
               storeResult(data);
@@ -780,6 +788,215 @@
         return rawClear.apply(this, arguments);
       };
     }
+    return true;
+  }
+
+
+  /* ===== v94：网络优化（预热 / 酷狗优先渐进搜索 / 下一首预解析） ===== */
+  var MR_SEARCH_PAGE_LIMITS = { netease: 18, qq: 12, kugou: 12, qishui: 12, bodian: 12, ytm: 10, spotify: 10 };
+  var mrWarmDone = 0;
+  var mrWarmLastAt = 0;
+
+  function mrNetApiJson(url, timeoutMs) {
+    try {
+      if (typeof window.apiJson === 'function') return window.apiJson(url, timeoutMs ? { timeoutMs: timeoutMs } : undefined);
+    } catch (e) { }
+    return Promise.reject(new Error('NO_API_JSON'));
+  }
+
+  function mrNetSearchTimeout(ms) {
+    return new Promise(function (resolve) { window.setTimeout(function () { resolve(null); }, ms); });
+  }
+
+  function mrNetProviderPageInfo(value, limit) {
+    var songs = Array.isArray(value && value.songs) ? value.songs : [];
+    var offset = 0;
+    var nextOffset = Number(value && value.nextOffset);
+    if (!isFinite(nextOffset) || nextOffset <= offset) nextOffset = offset + songs.length;
+    var hasMore = value && value.hasMore === true;
+    if (value && value.hasMore == null) hasMore = songs.length >= limit;
+    if (!songs.length || nextOffset <= offset) hasMore = false;
+    return {
+      offset: offset,
+      limit: Number(value && value.limit) || limit,
+      nextOffset: nextOffset,
+      hasMore: hasMore,
+      total: Number(value && value.total) || 0,
+      failed: false
+    };
+  }
+
+  /* 连接预热：只发 limit=1 的轻量搜索，目的只是让 native OkHttp 建好连接池 */
+  function mrWarmConnections() {
+    var now = Date.now();
+    if (mrWarmDone && now - mrWarmLastAt < 10 * 60 * 1000) return;
+    mrWarmDone = 1;
+    mrWarmLastAt = now;
+    var warm = function (url, delay) {
+      window.setTimeout(function () {
+        try { mrNetApiJson(url, 15000).catch(function () { }); } catch (e) { }
+      }, delay);
+    };
+    /* 主用酷狗：先热酷狗；网易云是其它平台的兜底，排后面，避免抢连接 */
+    warm('/api/kugou/search?keywords=a&limit=1&offset=0', 3200);
+    warm('/api/search?keywords=a&limit=1&offset=0', 3800);
+  }
+
+  /* 后台补齐其它平台结果：并入 searchMusicRenderState 并增量 append（不重排、不闪烁） */
+  function mrMergeBackgroundSearch(q, mode, key, providerPages, rest) {
+    if (!rest.length) return;
+    var jobs = rest.map(function (provider) {
+      var limit = MR_SEARCH_PAGE_LIMITS[provider] || 12;
+      var url;
+      try { url = window.searchProviderUrl(provider, q, limit, 0); } catch (e) { url = ''; }
+      if (!url) return Promise.resolve(null);
+      return mrNetApiJson(url, 9000).then(function (value) {
+        return { provider: provider, value: value || {}, limit: limit };
+      }).catch(function () { return null; });
+    });
+    Promise.all(jobs).then(function (list) {
+      var st = window.searchMusicRenderState;
+      if (!st || st.key !== key) return;
+      var incoming = [];
+      var anyMore = false;
+      list.forEach(function (item) {
+        if (!item || !item.value) return;
+        var songs = Array.isArray(item.value.songs) ? item.value.songs : [];
+        if (songs.length) incoming = incoming.concat(songs);
+        providerPages[item.provider] = mrNetProviderPageInfo(item.value, item.limit);
+        if (item.value.hasMore === true) anyMore = true;
+      });
+      if (!incoming.length) return;
+      var merged = (typeof window.mergeUniqueSearchSongPools === 'function')
+        ? window.mergeUniqueSearchSongPools(st.songs || [], incoming)
+        : (st.songs || []).concat(incoming);
+      if (!merged || merged.length <= (st.songs || []).length) return;
+      st.songs = merged;
+      st.providerPages = providerPages;
+      st.remoteHasMore = !!anyMore;
+      try { window.playlist = merged; } catch (e) { }
+      try {
+        if (typeof window.appendNextSearchResults === 'function') window.appendNextSearchResults(key);
+        else if (typeof window.refreshSearchLoadMoreSentinel === 'function') window.refreshSearchLoadMoreSentinel();
+      } catch (e) { }
+    }).catch(function () { });
+  }
+
+  function patchProgressiveSearch() {
+    if (window.__mrProgressiveSearch) return true;
+    if (typeof window.fetchMusicSearchResults !== 'function') return false;
+    if (typeof window.searchProviderUrl !== 'function' || typeof window.activeSearchProvidersForMode !== 'function') return false;
+    if (typeof window.mergeSongSearchResults !== 'function') return false;
+    window.__mrProgressiveSearch = 1;
+    var raw = window.fetchMusicSearchResults;
+    window.fetchMusicSearchResults = async function (q, mode, previousPages) {
+      try {
+        if (previousPages) return raw.apply(this, arguments);
+        var providers = window.activeSearchProvidersForMode(mode) || [];
+        if (providers.length < 2 || providers.indexOf('kugou') < 0) return raw.apply(this, arguments);
+        var limit = MR_SEARCH_PAGE_LIMITS.kugou || 12;
+        var kgUrl = window.searchProviderUrl('kugou', q, limit, 0);
+        var kg = await Promise.race([
+          mrNetApiJson(kgUrl, 6500).then(function (value) { return { value: value || {} }; }).catch(function () { return null; }),
+          mrNetSearchTimeout(6500)
+        ]);
+        var kgSongs = Array.isArray(kg && kg.value && kg.value.songs) ? kg.value.songs : [];
+        if (!kgSongs.length) {
+          /* 可能是历史空包缓存：加 cache-buster 再试一次 */
+          var bust = kgUrl + (kgUrl.indexOf('?') >= 0 ? '&' : '?') + 'mrrerun=' + Date.now();
+          var kg2 = await Promise.race([
+            mrNetApiJson(bust, 6500).then(function (value) { return { value: value || {} }; }).catch(function () { return null; }),
+            mrNetSearchTimeout(6500)
+          ]);
+          if (kg2 && kg2.value) { kg = kg2; kgSongs = Array.isArray(kg2.value.songs) ? kg2.value.songs : []; }
+        }
+        if (!kg || !kg.value) return raw.apply(this, arguments);
+        if (!kgSongs.length) {
+          /* 酷狗没结果：并行拿其它平台，6 秒预算，不再走 raw（raw 会等每个平台 12s） */
+          var restEarly = providers.filter(function (p) { return p !== 'kugou'; });
+          var early = await Promise.race([
+            Promise.all(restEarly.map(function (p) {
+              var lm = MR_SEARCH_PAGE_LIMITS[p] || 12;
+              var u;
+              try { u = window.searchProviderUrl(p, q, lm, 0); } catch (e) { u = ''; }
+              if (!u) return Promise.resolve(null);
+              return mrNetApiJson(u, 8000).then(function (value) { return { provider: p, value: value || {}, limit: lm }; }).catch(function () { return null; });
+            })),
+            mrNetSearchTimeout(6000)
+          ]);
+          var earlyList = Array.isArray(early) ? early : [];
+          var pp = {};
+          var pools = { netease: [], qq: [], kugou: [], qishui: [], spotify: [] };
+          var extra = [];
+          earlyList.forEach(function (item) {
+            if (!item || !item.value) return;
+            var ss = Array.isArray(item.value.songs) ? item.value.songs : [];
+            pp[item.provider] = mrNetProviderPageInfo(item.value, item.limit);
+            if (pools[item.provider]) pools[item.provider] = pools[item.provider].concat(ss);
+            else extra = extra.concat(ss);
+          });
+          var mergedEarly = window.mergeSongSearchResults(pools.netease, pools.qq, pools.kugou, pools.qishui, pools.spotify, 60, q).concat(extra);
+          return { songs: mergedEarly, providerPages: pp, hasMore: false };
+        }
+        var providerPages = {};
+        providerPages.kugou = mrNetProviderPageInfo(kg.value, limit);
+        var songs = window.mergeSongSearchResults([], [], kgSongs, [], [], 60, q);
+        var result = { songs: songs, providerPages: providerPages, hasMore: false };
+        var rest = providers.filter(function (p) { return p !== 'kugou'; });
+        var key = '';
+        try { key = window.searchResultKey(q, mode); } catch (e) { key = ''; }
+        if (key && rest.length) {
+          window.setTimeout(function () { mrMergeBackgroundSearch(q, mode, key, providerPages, rest); }, 60);
+        }
+        return result;
+      } catch (e) {
+        return raw.apply(this, arguments);
+      }
+    };
+    return true;
+  }
+
+  /* 下一首预解析：复用宿主自己的解析函数 → 命中我们的 song/url 缓存 */
+  var mrPrefetchState = { key: '', timer: 0 };
+  function mrPrefetchNextTrack() {
+    try {
+      var q = window.playQueue;
+      var idx = window.currentIdx;
+      if (!q || !q.length || typeof idx !== 'number' || idx < 0) return;
+      var next = q[idx + 1];
+      if (!next || next.type === 'local' || next.source === 'local' || next.localUrl) return;
+      if (typeof window.resolveAlbumGaplessPlaybackData !== 'function') return;
+      var key = '';
+      try {
+        key = (next.hash || next.id || next.mid || '') + '|' + idx;
+      } catch (e) { key = String(idx); }
+      if (mrPrefetchState.key === key) return;
+      mrPrefetchState.key = key;
+      if (mrPrefetchState.timer) window.clearTimeout(mrPrefetchState.timer);
+      mrPrefetchState.timer = window.setTimeout(function () {
+        mrPrefetchState.timer = 0;
+        try { window.resolveAlbumGaplessPlaybackData(next).catch(function () { }); } catch (e) { }
+      }, 1800);
+    } catch (e) { }
+  }
+
+  function patchNextTrackPrefetch() {
+    if (window.__mrPrefetchPatched) return true;
+    window.__mrPrefetchPatched = 1;
+    document.addEventListener('playing', function (ev) {
+      var t = ev.target;
+      if (!t || t.tagName !== 'AUDIO') return;
+      if (mrPrefetchState.key && mrPrefetchState.key.indexOf('|') > 0) mrPrefetchState.key = '';
+      window.setTimeout(mrPrefetchNextTrack, 200);
+    }, true);
+    document.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.closest) return;
+      if (t.closest('#play-btn, .control-prev, .control-next, .song-next, .queue-item')) {
+        mrPrefetchState.key = '';
+        window.setTimeout(mrPrefetchNextTrack, 2500);
+      }
+    }, true);
     return true;
   }
 
@@ -2632,6 +2849,9 @@
     bindTrackEnter();
     bindSearchPlayEnter();
     try { patchHomeHeroMedia(); } catch (e) { }
+    try { patchProgressiveSearch(); } catch (e) { }
+    try { patchNextTrackPrefetch(); } catch (e) { }
+    try { window.setTimeout(function () { try { patchProgressiveSearch(); } catch (e) { } mrWarmConnections(); }, 3000); } catch (e) { }
     bindHostNavTriggers();
     bindStageGuard();
     bindDiyTap();
