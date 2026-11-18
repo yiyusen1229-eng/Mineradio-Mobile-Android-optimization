@@ -1000,6 +1000,53 @@
     return true;
   }
 
+  /* v90：从搜索结果直接点歌时，宿主只会开始播放、不会切播放页（也不触发我们的首页隐藏钩子）。
+     这里在搜索结果点击后兜底：只要确认已经在播，就收起搜索浮层并进播放页。 */
+  function bindSearchPlayEnter() {
+    if (window.__mrSearchPlayEnter) return;
+    window.__mrSearchPlayEnter = 1;
+    function tryEnterFromSearch() {
+      try {
+        if (pageState !== 'home' || isBusy()) return false;
+        if (!hasPlaybackSignal()) return false;
+        var sa = document.getElementById('search-area');
+        if (sa && sa.classList.contains('has-results')) {
+          try { clearSearchResults(); } catch (e) { }
+          try { setPeek(sa, false, 'search'); } catch (e) { }
+        }
+        try { if (window.__mrDiyOpen) setDiyPanel(false); } catch (e) { }
+        enterPlayerPage();
+        return true;
+      } catch (e) { return false; }
+    }
+    document.addEventListener('click', function (ev) {
+      var t = ev.target;
+      var hit = t && t.closest ? t.closest('#search-results .search-result') : null;
+      if (!hit) return;
+      /* 解析/起播可能要好几秒，轮询等到真的在播再切页（最多 20s） */
+      if (window.__mrSearchPlayTimer) { try { window.clearInterval(window.__mrSearchPlayTimer); } catch (e) { } }
+      var tries = 0;
+      window.__mrSearchPlayTimer = window.setInterval(function () {
+        tries += 1;
+        if (tryEnterFromSearch() || tries >= 28) {
+          try { window.clearInterval(window.__mrSearchPlayTimer); } catch (e) { }
+          window.__mrSearchPlayTimer = 0;
+        }
+      }, 700);
+    }, true);
+    /* 宿主也可能通过键盘/其它入口播放，这里再兜一层：离开首页类名消失但没进播放页时补进 */
+    document.addEventListener('click', function () {
+      window.setTimeout(function () {
+        try {
+          if (pageState !== 'home' || isBusy()) return;
+          if (!hasPlaybackSignal()) return;
+          if (!bodyEl() || bodyEl().classList.contains('empty-home-active')) return;
+          tryEnterFromSearch();
+        } catch (e) { }
+      }, 900);
+    }, true);
+  }
+
   var trackEnterBarEl = null;
   function bindTrackEnter() {
     if (window.__mrTrackEnterBound) return;
@@ -1741,7 +1788,12 @@
           if (pageState !== 'home') return res;
           if (window.homeSuppressed) return res;
           if (!hasPlaybackSignal()) return res;      /* 只认播放事实，避免面板/上传等误触发 */
-          if (anyOverlayOpen()) return res;
+          if (anyOverlayOpen()) {
+            /* v90：从搜索结果/歌单里直接点歌播放时，宿主会关掉首页但搜索浮层还开着，
+               旧逻辑在这里 return 导致「歌在放、界面却留在首页」。真在播放就收起浮层并进播放页。 */
+            try { if (hasPlaybackSignal()) enterPlayerFromHostHide(); } catch (e) { }
+            return res;
+          }
           enterPlayerPage();
         } catch (e) { }
         return res;
@@ -2337,6 +2389,7 @@
     layoutPhoneBar();
     styleLoginModal();
     bindTrackEnter();
+    bindSearchPlayEnter();
     bindHostNavTriggers();
     bindStageGuard();
     bindDiyTap();

@@ -419,3 +419,22 @@ scroll（rAF 节流）里重新执行 `$ql.innerHTML = ...` → 所有 `.queue-i
 
 验证：当前队列 44 条，连续滚动 25 帧，`MutationObserver` 记录 **0 次 DOM 变更**（此前每帧重建）；面板吸顶头正常，
 条目、封面、喜欢/下移/收藏/移除按钮都在；回归 23/23 PASS。
+---
+
+## 19. v90：搜索栏直接点歌不进播放页
+
+**现象**：在搜索栏点一首歌，声音开始放了、底栏也显示在播，但界面留在首页（顶部还是搜索栏，stage 不出歌词）。
+
+**复现**：点结果后读 body class → `empty-home-active` 已被宿主移除，但既没有 `mr-player-page`、也没有回到首页 → 卡在中间态。
+
+**原因（两处）**：
+1. 宿主「从搜索结果播放」只做播放，不负责页面切换，也不触发我们「首页被隐藏 → 进播放页」的钩子；
+2. 我们的 `updateEmptyHomeVisibility` 包装里有 `if (anyOverlayOpen()) return res;`——搜索浮层（`has-results`）算 overlay，
+   所以即使首页被隐藏也直接 return，不会进播放页。
+
+**修法**：
+- 该分支里若 `hasPlaybackSignal()` 为真，改走 `enterPlayerFromHostHide()`（自己清搜索/歌单/DIY 浮层再 `enterPlayerPage()`）；
+- 新增 `bindSearchPlayEnter()`：监听 `#search-results .search-result` 点击，之后每 700ms 轮询（最多 20s，因为 URL 解析/起播可能要好几秒），
+  一旦「在播 + 页面仍停在首页 + 首页已隐藏」就收起搜索浮层并 `enterPlayerPage()`。
+
+**验证**：点搜索结果 → `mr-player-page` 出现、顶部歌条上移、歌词/舞台正常；返回键能回首页；回归 23/23 PASS。
