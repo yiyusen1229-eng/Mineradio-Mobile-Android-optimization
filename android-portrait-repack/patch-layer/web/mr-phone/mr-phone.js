@@ -399,7 +399,25 @@
         if (hit && now - hit.t < state.ttl) {
           storeResult(hit.d);
           var cachedResp = makeJsonResponse(hit.d);
-          if (cachedResp) return cachedResp;
+          if (cachedResp) { try { mrNetRec(kind, key, 0, true); } catch (e) { } return cachedResp; }
+        }
+        /* v95-C1：like/check 全部已知 → 本地合成 */
+        if (kind === 'other' && /like\/check|\/like\b/.test(absUrl)) {
+          try {
+            var synth = mrLikeSynthesize(absUrl);
+            if (synth) {
+              mrNetStat.likeSkip += 1;
+              mrNetRec('like', absUrl, 0, true);
+              var sr = makeJsonResponse(synth);
+              if (sr) return sr;
+            }
+          } catch (e) { }
+        }
+        /* v95-C2：正在起播时把歌词请求压到出声之后 */
+        if (kind === 'lyric' || /\/lyric/.test(absUrl)) {
+          try {
+            if (mrPlayPending.at) { mrNetStat.lyricDeferred += 1; await mrWaitPlayStarted(2500); }
+          } catch (e) { }
         }
         if (!hit) {
           var db0 = await ensureDb();
@@ -429,9 +447,12 @@
           res = await fetchPromise;
         }
         try {
+          var __mrNetT0b = performance.now();
           if (res && res.ok) {
             var clone = res.clone();
             clone.json().then(function (data) {
+              try { mrNetRec(kind, key, performance.now() - __mrNetT0b, false); } catch (e) { }
+              if (kind === 'other' && /like\/check|\/like\b/.test(absUrl)) mrLikeRememberFromResponse(data);
               if (isSentinelPayload(data)) return;
               var item = { t: Date.now(), d: data };
               state.mem[key] = item;
@@ -942,6 +963,10 @@
         providerPages.kugou = mrNetProviderPageInfo(kg.value, limit);
         var songs = window.mergeSongSearchResults([], [], kgSongs, [], [], 60, q);
         var result = { songs: songs, providerPages: providerPages, hasMore: false };
+        try {
+          mrNetStat.searchMs.push(Math.round(performance.now() - (window.__mrSearchT0 || performance.now())));
+          if (mrNetStat.searchMs.length > 20) mrNetStat.searchMs.shift();
+        } catch (e) { }
         var rest = providers.filter(function (p) { return p !== 'kugou'; });
         var key = '';
         try { key = window.searchResultKey(q, mode); } catch (e) { key = ''; }
@@ -997,6 +1022,250 @@
         window.setTimeout(mrPrefetchNextTrack, 2500);
       }
     }, true);
+    return true;
+  }
+
+
+  /* ===== v95：网络计时（F）+ 关键路径瘦身（C） =====
+     C1：like/check 合并防抖 + 按 hash 记忆（同一批 hash 再次出现直接本地合成响应）；
+     C2：歌词请求在「正在起播」期间延后到真正出声之后（最多 2.5s）。
+     F ：把 /api 请求耗时、搜索首条耗时、起播耗时、音频缓存状态收在一张小面板里（三点菜单→网络）。 */
+  var MR_NET_KEEP = 160;
+  var mrNetStat = (window.__mrNetStats = window.__mrNetStats || {
+    reqs: [], searchMs: [], playMs: [], likeSkip: 0, lyricDeferred: 0
+  });
+
+  function mrNetRec(kind, url, ms, cached) {
+    try {
+      var list = mrNetStat.reqs;
+      list.push({ k: kind, u: String(url || '').slice(0, 120), ms: Math.round(ms), c: !!cached, t: Date.now() });
+      if (list.length > MR_NET_KEEP) list.splice(0, list.length - MR_NET_KEEP);
+    } catch (e) { }
+  }
+
+  function mrNetKind(url) {
+    if (/\/song\/url/.test(url)) return 'songurl';
+    if (/\/lyric/.test(url)) return 'lyric';
+    if (/like\/check|\/like\b/.test(url)) return 'like';
+    if (/\/search|cloudsearch/.test(url)) return 'search';
+    if (/\/status/.test(url)) return 'status';
+    if (/beatmap/.test(url)) return 'beatmap';
+    return 'other';
+  }
+
+  /* ---- C1：like/check 的 hash 级记忆 ---- */
+  var MR_LIKE_MAP_KEY = 'mr-like-map-v1';
+  var mrLikeMap = null;
+  function mrLikeMapLoad() {
+    if (mrLikeMap) return mrLikeMap;
+    try { mrLikeMap = JSON.parse(localStorage.getItem(MR_LIKE_MAP_KEY) || '{}') || {}; } catch (e) { mrLikeMap = {}; }
+    return mrLikeMap;
+  }
+  function mrLikeMapSave() {
+    try {
+      var map = mrLikeMapLoad();
+      var keys = Object.keys(map);
+      if (keys.length > 2500) {
+        keys.slice(0, keys.length - 2500).forEach(function (k) { delete map[k]; });
+      }
+      localStorage.setItem(MR_LIKE_MAP_KEY, JSON.stringify(map));
+    } catch (e) { }
+  }
+
+  /* 把 like/check 响应里的 liked 结果按 hash 记下来（成功后调用） */
+  function mrLikeRememberFromResponse(body) {
+    try {
+      var liked = body && body.liked;
+      if (!liked || typeof liked !== 'object') return;
+      var map = mrLikeMapLoad();
+      var changed = 0;
+      Object.keys(liked).forEach(function (k) {
+        var v = liked[k];
+        var val = !!(v === true || v === 1 || v === '1' || (v && (v.liked === true || v.status === 1)));
+        map[k] = val ? 1 : 0;
+        changed++;
+      });
+      if (changed) mrLikeMapSave();
+    } catch (e) { }
+  }
+
+  /* 请求里的 hash 是否全部已知 → 已知就直接本地合成响应 */
+  function mrLikeSynthesize(url) {
+    try {
+      var m = String(url || '').match(/[?&](?:hashes|ids|hashs)=([^&]+)/);
+      if (!m) return null;
+      var raw = decodeURIComponent(m[1]);
+      var ids = raw.split(',').map(function (x) { return String(x || '').trim().toLowerCase(); }).filter(Boolean);
+      if (!ids.length) return null;
+      var map = mrLikeMapLoad();
+      var liked = {};
+      for (var i = 0; i < ids.length; i++) {
+        var v = map[ids[i]];
+        if (v === undefined) return null;
+        liked[ids[i]] = !!v;
+      }
+      return { ok: true, liked: liked, mrCache: 1 };
+    } catch (e) { return null; }
+  }
+
+  /* ---- C2：正在起播时延后歌词请求 ---- */
+  var mrPlayPending = { at: 0, timer: 0 };
+  function mrMarkPlayPending() {
+    mrPlayPending.at = Date.now();
+    if (mrPlayPending.timer) window.clearTimeout(mrPlayPending.timer);
+    mrPlayPending.timer = window.setTimeout(function () { mrPlayPending.at = 0; }, 4000);
+  }
+  function mrWaitPlayStarted(maxMs) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var finish = function () { if (done) return; done = true; resolve(); };
+      try {
+        document.addEventListener('playing', function onP(e) {
+          if (!e.target || e.target.tagName !== 'AUDIO') return;
+          document.removeEventListener('playing', onP, true);
+          finish();
+        }, true);
+      } catch (e) { }
+      window.setTimeout(finish, maxMs);
+    });
+  }
+
+  /* ---- C0：syncLikeStatusForSongs 合并防抖（避免一次渲染打几十个 like 请求） ---- */
+  var mrLikeSyncPending = null;
+  var mrLikeSyncTimer = 0;
+  function patchLikeStatusSync() {
+    if (window.__mrLikeSyncPatched) return true;
+    if (typeof window.syncLikeStatusForSongs !== 'function') return false;
+    window.__mrLikeSyncPatched = 1;
+    var raw = window.syncLikeStatusForSongs;
+    window.syncLikeStatusForSongs = function (songs) {
+      try {
+        if (Array.isArray(songs)) {
+          if (!mrLikeSyncPending) mrLikeSyncPending = [];
+          for (var i = 0; i < songs.length; i++) {
+            var s = songs[i];
+            if (s) mrLikeSyncPending.push(s);
+          }
+        }
+        if (mrLikeSyncTimer) return;
+        mrLikeSyncTimer = window.setTimeout(function () {
+          mrLikeSyncTimer = 0;
+          var batch = mrLikeSyncPending || [];
+          mrLikeSyncPending = null;
+          if (!batch.length) return;
+          var seen = Object.create(null);
+          var uniq = [];
+          batch.forEach(function (s) {
+            var key = (s && (s.hash || s.id || s.mid)) || '';
+            if (key && seen[key]) return;
+            if (key) seen[key] = 1;
+            uniq.push(s);
+          });
+          if (uniq.length > 80) uniq = uniq.slice(0, 80);
+          try { raw.call(window, uniq); } catch (e) { }
+        }, 700);
+      } catch (e) {
+        try { raw.apply(window, arguments); } catch (e2) { }
+      }
+    };
+    return true;
+  }
+
+  /* ---- 面板 UI ---- */
+  var mrNetPanelEl = null;
+  function mrNetPanelHtml() {
+    var st = mrNetStat;
+    var avg = function (arr) {
+      if (!arr.length) return null;
+      var sum = 0;
+      for (var i = 0; i < arr.length; i++) sum += arr[i];
+      return Math.round(sum / arr.length);
+    };
+    var lastSearch = st.searchMs.length ? st.searchMs[st.searchMs.length - 1] : null;
+    var lastPlay = st.playMs.length ? st.playMs[st.playMs.length - 1] : null;
+    var slow = st.reqs.slice().sort(function (a, b) { return b.ms - a.ms; }).slice(0, 8);
+    var cacheHits = st.reqs.filter(function (r) { return r.c; }).length;
+    var cacheInfo = 'n/a';
+    try {
+      if (window.mrAudioCacheStats) {
+        var a = window.mrAudioCacheStats();
+        cacheInfo = a.enabled ? ('开 · 命中 ' + a.hits + ' / 未命中 ' + a.misses + ' / 排队 ' + a.pending) : '关';
+      }
+    } catch (e) { }
+    var rows = slow.map(function (r) {
+      return '<div class="mr-net-row"><span class="mr-net-k">' + r.k + '</span>' +
+        '<span class="mr-net-u">' + String(r.u).replace(/</g, '&lt;') + '</span>' +
+        '<span class="mr-net-ms' + (r.ms > 2000 ? ' slow' : '') + '">' + r.ms + 'ms' + (r.c ? ' ·缓存' : '') + '</span></div>';
+    }).join('') || '<div class="mr-net-empty">还没有请求记录</div>';
+    return '' +
+      '<div class="mr-net-head"><strong>网络计时</strong><span class="mr-net-close">×</span></div>' +
+      '<div class="mr-net-grid">' +
+      '<div><b>' + (lastSearch == null ? '—' : lastSearch + 'ms') + '</b><small>搜索首条（均 ' + (avg(st.searchMs) == null ? '—' : avg(st.searchMs) + 'ms') + '）</small></div>' +
+      '<div><b>' + (lastPlay == null ? '—' : lastPlay + 'ms') + '</b><small>起播（均 ' + (avg(st.playMs) == null ? '—' : avg(st.playMs) + 'ms') + '）</small></div>' +
+      '<div><b>' + cacheHits + ' / ' + st.reqs.length + '</b><small>请求缓存命中</small></div>' +
+      '<div><b>' + st.likeSkip + '</b><small>like 请求省掉</small></div>' +
+      '</div>' +
+      '<div class="mr-net-sec">音频缓存：' + cacheInfo + '</div>' +
+      '<div class="mr-net-sec">最慢请求 Top 8</div>' +
+      rows +
+      '<div class="mr-net-actions"><button type="button" data-mr-net-clear="1">清空</button><button type="button" data-mr-net-close="1">关闭</button></div>';
+  }
+
+  function mrNetPanelRender() {
+    if (!mrNetPanelEl) return;
+    mrNetPanelEl.innerHTML = mrNetPanelHtml();
+  }
+
+  function mrNetPanelToggle(force) {
+    if (!mrNetPanelEl) {
+      mrNetPanelEl = document.createElement('div');
+      mrNetPanelEl.id = 'mr-net-panel';
+      mrNetPanelEl.addEventListener('click', function (ev) {
+        var t = ev.target;
+        if (!t) return;
+        if (t.closest('[data-mr-net-close]') || t.closest('.mr-net-close')) { mrNetPanelToggle(false); return; }
+        if (t.closest('[data-mr-net-clear]')) {
+          mrNetStat.reqs.length = 0; mrNetStat.searchMs.length = 0; mrNetStat.playMs.length = 0;
+          mrNetStat.likeSkip = 0; mrNetStat.lyricDeferred = 0;
+          mrNetPanelRender();
+        }
+      });
+      document.body.appendChild(mrNetPanelEl);
+    }
+    var show = typeof force === 'boolean' ? force : mrNetPanelEl.classList.contains('mr-net-hide');
+    mrNetPanelEl.classList.toggle('mr-net-hide', !show);
+    if (show) mrNetPanelRender();
+  }
+  window.mrNetPanel = { toggle: mrNetPanelToggle, render: mrNetPanelRender };
+
+  function patchNetStatsUi() {
+    if (window.__mrNetUiPatched) return true;
+    window.__mrNetUiPatched = 1;
+    /* 起播计时：点播放/上一首/下一首/队列项/搜索结果 → 到真正出声 */
+    document.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.closest) return;
+      if (t.closest('#play-btn, #prev-btn, #next-btn, .queue-item, #search-results .search-result, #pl-list .pl-detail-row')) {
+        mrMarkPlayPending();
+        window.__mrPlayMark = performance.now();
+      }
+    }, true);
+    document.addEventListener('playing', function (ev) {
+      var t = ev.target;
+      if (!t || t.tagName !== 'AUDIO') return;
+      try {
+        if (window.__mrPlayMark) {
+          mrNetStat.playMs.push(Math.round(performance.now() - window.__mrPlayMark));
+          if (mrNetStat.playMs.length > 20) mrNetStat.playMs.shift();
+          window.__mrPlayMark = 0;
+        }
+        mrPlayPending.at = 0;
+      } catch (e) { }
+      if (mrNetPanelEl && !mrNetPanelEl.classList.contains('mr-net-hide')) mrNetPanelRender();
+    }, true);
+    window.setInterval(function () {
+      if (mrNetPanelEl && !mrNetPanelEl.classList.contains('mr-net-hide')) mrNetPanelRender();
+    }, 1500);
     return true;
   }
 
@@ -1638,6 +1907,16 @@
       actions.appendChild(loginBtn);
 
       /* v70：菜单里的「DIY 玩家模式」入口删除——DIY 只由底栏 DIY 键开关面板 */
+
+      var netBtn = document.createElement('button');
+      netBtn.type = 'button';
+      netBtn.className = 'phone-chrome-action';
+      netBtn.textContent = '网络';
+      netBtn.addEventListener('click', function () {
+        toggleMenu(false);
+        try { window.mrNetPanel.toggle(); } catch (e) { }
+      });
+      actions.appendChild(netBtn);
 
       var plBtn = document.createElement('button');
       plBtn.type = 'button';
@@ -2850,6 +3129,9 @@
     bindSearchPlayEnter();
     try { patchHomeHeroMedia(); } catch (e) { }
     try { patchProgressiveSearch(); } catch (e) { }
+    try { patchLikeStatusSync(); } catch (e) { }
+    try { patchNetStatsUi(); } catch (e) { }
+    try { window.setTimeout(function () { try { patchLikeStatusSync(); } catch (e) { } try { patchNetStatsUi(); } catch (e) { } }, 2500); } catch (e) { }
     try { patchNextTrackPrefetch(); } catch (e) { }
     try { window.setTimeout(function () { try { patchProgressiveSearch(); } catch (e) { } mrWarmConnections(); }, 3000); } catch (e) { }
     bindHostNavTriggers();
