@@ -363,3 +363,44 @@ Setting the value of 'mineradio-home-dashboard-video-meta-v1' exceeded the quota
 **验证**：打开歌单 → 展开「我喜欢（297 首）」→ 连续滚动 25 帧，`MutationObserver` 记录 **0 次 DOM 变更**；
 详情行全量渲染（96 = 宿主当前已加载曲目数，分页加载后自动再渲一次）；逐帧亮度差最大 19（属于正常内容位移，
 没有整片闪）；回归 23/23 PASS。
+---
+
+## 17. v88：搜索/播放慢——架构解释 + 手机层优化
+
+### 17.1 这个项目是怎么拿歌的
+WebView 里跑一套 JS「平台适配层」（`js/ported/ref` 网易云、`kugou-api.js`、`qq`、`qishui`、`bodian`、`ytm`、`spotify`），
+`/api/*` 由 `js/android-shim/10-api-router.js` 就地分发；真正的 HTTP 请求经原生 `FoliaBridge`（OkHttp）发出，
+带上 WebView CookieManager 里的账号 Cookie，所以能绕 CORS 访问各平台网页接口——本质是**客户端侧逆向爬取**，
+不是官方开放 API。音频最后从平台 CDN 取（经本地代理/服务）。
+
+### 17.2 实测数据（本机、当前网络，单位 ms）
+| 请求 | 耗时 |
+|---|---|
+| `qq/login/status` | 26777 |
+| `kugou/song/like/check` | 21288 |
+| `qishui/search` | 23090 |
+| `/api/search`（网易云） | 2128~9067 |
+| `kugou/song/url` | 7104 |
+| `bodian/search` | 1203~4216 |
+| RTT | 网易≈387ms、QQ≈312ms、酷狗 CDN≈61ms |
+
+宿主 `fetchMusicSearchResults()` 用 `Promise.allSettled` 等**全部平台**返回才合并渲染 → 首屏被最慢平台决定。
+
+### 17.3 手机层做了什么（v88）
+1. **缓存键归一化**：剥掉 `t/_/_t/ts/timestamp` 等易变参数（原来每个 status 请求都带 `?t=时间戳`，缓存永远 miss）；
+2. **status 缓存 10 分钟**：`*/status`、`*/login/status` 命中即返回；登录/登出请求自动清空；
+3. **song/url 缓存 10 分钟**：同一首重播/切回不再重新解析；
+4. **搜索 12 秒上限**：防 20s+ 卡死（`Promise.allSettled` 仍等最慢者，但至少不会无限等）；
+5. 原有 `/api` GET 内存 + IndexedDB 缓存（20 分钟）继续生效。
+
+### 17.4 实测收益
+- 重复同一个搜索：首条结果 **1036ms**（首次仍取决于平台）；
+- status 第二次请求：**0ms**（`x-mr-cache: 1`）；
+- `song/url` 第二次请求：**0ms**；
+- 暂停后重新播放同一首：**281ms** 恢复；
+- 回归 23/23 PASS。
+
+### 17.5 没做/做不了的
+- 真正的首屏提速要改宿主：搜索改成「谁先回来先渲染」的渐进式（或把 `Promise.allSettled` 改成带预算的 `Promise.race` 逐平台刷新）；
+- 后台预热 status 实测反而挤占原生桥队列（FoliaBridge 请求像串行排队），会把第一次搜索挤到超时 → 已关闭；
+- 跨境 RTT 是物理成本，无法在 App 内消除。

@@ -203,7 +203,13 @@
      宿主每次打开歌单都会重新拉 /api/user/playlists；旧手机层的 localStorage 缓存已在 v78 清掉。
      这里补一个不占 localStorage 配额的缓存：内存命中即时返回，IndexedDB 持久化（TTL 20 分钟）。
      注意：宿主的 runtime-log 模块会在手机层之后替换 window.fetch，所以安装函数要可重复调用，
-     看门狗发现 fetch 被换掉时重新包到最外层。 */
+     看门狗发现 fetch 被换掉时重新包到最外层。
+
+     v88 增补（性能）：
+       - 缓存键归一化（剥掉 ?t= 时间戳等易变参数）；
+       - 各平台 status / login-status 接口内存缓存 5 分钟，登录/登出自动失效；
+       - song/url 解析结果内存缓存 10 分钟（同一首重播秒开）；
+       - 搜索接口 4.5s 硬超时，超时返回空结果，先渲染其它平台。 */
   function installApiFetchCache() {
     if (typeof window.fetch !== 'function') return false;
     var state = window.__mrApiCacheState;
@@ -214,12 +220,18 @@
         store: 'kv',
         mem: Object.create(null),
         dbPromise: null,
-        wrapped: null
+        wrapped: null,
+        statusMem: Object.create(null),
+        urlMem: Object.create(null)
       };
       window.__mrApiCacheState = state;
       window.__mrApiCacheInstalled = 1;
     }
     if (window.fetch === state.wrapped) return true;
+
+    var STATUS_TTL = 10 * 60 * 1000;
+    var SONG_URL_TTL = 10 * 60 * 1000;
+    var SEARCH_TIMEOUT = 12000;
 
     function ensureDb() {
       if (state.dbPromise) return state.dbPromise;
@@ -270,8 +282,33 @@
         return new Response(JSON.stringify(data), { status: 200, statusText: 'OK', headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-MR-Cache': '1' } });
       } catch (e) { return null; }
     }
+    function emptySearchPayload() {
+      return { ok: false, error: 'MR_SEARCH_TIMEOUT', songs: [], result: { songs: [] }, playlists: [], tracks: [], data: { lists: [], songs: [], info: [] }, list: [] };
+    }
     function fetchUrl(input) {
       try { return typeof input === 'string' ? input : (input && input.url) || ''; } catch (e) { return ''; }
+    }
+    /* 去掉时间戳类易变参数，否则每次 key 都不同 → 缓存永远不命中 */
+    function normalizeCacheKey(url) {
+      try {
+        var u = new URL(url, location.href);
+        var drop = ['t', '_', '_t', 'ts', 'timestamp', 'cachebuster', 'rnd', 'random'];
+        drop.forEach(function (k) { if (u.searchParams.has(k)) u.searchParams.delete(k); });
+        return u.href;
+      } catch (e) { return url; }
+    }
+    function classify(url) {
+      if (/\/status(\?|$)|\/login\/status/.test(url)) return 'status';
+      if (/\/song\/url(\?|$)/.test(url)) return 'songurl';
+      if (/\/search(\?|$)|\/cloudsearch\/pc/.test(url)) return 'search';
+      return 'other';
+    }
+    function clearAuthStatus() {
+      try {
+        Object.keys(state.statusMem).forEach(function (k) {
+          if (/\/status|login/.test(k)) delete state.statusMem[k];
+        });
+      } catch (e) { }
     }
     function cacheable(url, init) {
       try {
@@ -290,35 +327,77 @@
       var absUrl;
       try { absUrl = new URL(fetchUrl(input), location.href).href; } catch (e) { return rawFetch.apply(window, arguments); }
       if (!cacheable(absUrl, init)) return rawFetch.apply(window, arguments);
+      var key = normalizeCacheKey(absUrl);
+      var kind = classify(absUrl);
       var now = Date.now();
-      var hit = state.mem[absUrl];
-      if (hit && now - hit.t < state.ttl) {
-        var cachedResp = makeJsonResponse(hit.d);
-        if (cachedResp) return Promise.resolve(cachedResp);
-      }
       var self = this;
+
+      if (kind === 'status') {
+        var st = state.statusMem[key];
+        if (st && now - st.t < STATUS_TTL) {
+          var stResp = makeJsonResponse(st.d);
+          if (stResp) return Promise.resolve(stResp);
+        }
+      } else if (kind === 'songurl') {
+        var su = state.urlMem[key];
+        if (su && now - su.t < SONG_URL_TTL) {
+          var suResp = makeJsonResponse(su.d);
+          if (suResp) return Promise.resolve(suResp);
+        }
+      }
+      /* 登录 / 登出：清掉状态缓存，避免刚登录仍显示未登录 */
+      if (/\/login\/|\/logout/.test(absUrl)) clearAuthStatus();
+
+      function storeResult(data) {
+        try {
+          if (kind === 'status') state.statusMem[key] = { t: Date.now(), d: data };
+          else if (kind === 'songurl') state.urlMem[key] = { t: Date.now(), d: data };
+        } catch (e) { }
+      }
+
       return (async function () {
+        var hit = state.mem[key];
+        if (hit && now - hit.t < state.ttl) {
+          storeResult(hit.d);
+          var cachedResp = makeJsonResponse(hit.d);
+          if (cachedResp) return cachedResp;
+        }
         if (!hit) {
           var db0 = await ensureDb();
           if (db0) {
-            var rec = await dbGet(db0, absUrl);
-            if (rec && rec.t && now - rec.t < state.ttl) {
-              state.mem[absUrl] = { t: rec.t, d: rec.d };
+            var rec = await dbGet(db0, key);
+            if (rec && rec.t && Date.now() - rec.t < state.ttl) {
+              state.mem[key] = { t: rec.t, d: rec.d };
+              storeResult(rec.d);
               var resp1 = makeJsonResponse(rec.d);
               if (resp1) return resp1;
             }
           }
         }
-        var res = await rawFetch.call(self, input, init);
+
+        var fetchPromise = rawFetch.call(self, input, init);
+        var res;
+        if (kind === 'search') {
+          /* 搜索：硬超时，先让其它平台出结果，不让最慢的平台拖整页 */
+          res = await Promise.race([
+            fetchPromise.catch(function (e) { return { __mrErr: e }; }),
+            new Promise(function (resolve) { setTimeout(function () { resolve({ __mrTimeout: 1 }); }, SEARCH_TIMEOUT); })
+          ]);
+          if (res && res.__mrTimeout) return makeJsonResponse(emptySearchPayload());
+          if (res && res.__mrErr) throw res.__mrErr;
+        } else {
+          res = await fetchPromise;
+        }
         try {
           if (res && res.ok) {
             var clone = res.clone();
             clone.json().then(function (data) {
               var item = { t: Date.now(), d: data };
-              state.mem[absUrl] = item;
+              state.mem[key] = item;
+              storeResult(data);
               ensureDb().then(function (db2) {
                 if (!db2) return;
-                dbPut(db2, { k: absUrl, t: item.t, d: item.d });
+                dbPut(db2, { k: key, t: item.t, d: item.d });
                 try {
                   var all = db2.transaction(state.store, 'readonly').objectStore(state.store).getAll();
                   all.onsuccess = function () {
@@ -338,6 +417,28 @@
     };
     state.wrapped = wrapped;
     window.fetch = wrapped;
+
+    /* 后台预热各平台登录状态：这些接口实测 4~27s，等用户操作再去查会把搜索/播放拖慢 */
+    if (!state.warmTimer) {
+      /* 实测原生桥请求会排队，后台预热反而挤占用户操作；改成不预热，靠 status 缓存同样能覆盖重复操作 */
+      state.warmTimer = -1;
+      if (false) window.setTimeout(function () {
+        var urls = [
+          '/api/kugou/login/status',
+          '/api/qq/login/status',
+          '/api/qishui/status',
+          '/api/bodian/status',
+          '/api/ytm/status',
+          '/api/login/status'
+        ];
+        var stamp = Date.now();
+        urls.forEach(function (u, i) {
+          window.setTimeout(function () {
+            try { wrapped(u + '?t=' + (stamp + i), { method: 'GET' }).catch(function () { }); } catch (e) { }
+          }, i * 120);
+        });
+      }, 1500);
+    }
     return true;
   }
 
