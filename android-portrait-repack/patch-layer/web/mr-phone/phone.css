@@ -1880,8 +1880,8 @@ body.phone-shell.mr-just-home #bottom-bar{
   animation:none!important;transition:none!important;
 }
 .control-cluster.actions.mr-top-track::before{
-  content:'';position:absolute;inset:-8px -10px;border-radius:16px;z-index:-1;
-  background:linear-gradient(180deg,rgba(6,12,12,.72),rgba(6,12,12,0));
+  content:'';position:absolute;inset:-8px 52px -8px -10px;border-radius:16px;z-index:-1;
+  background:linear-gradient(180deg,rgba(6,12,12,.72),rgba(6,12,12,0));-webkit-mask-image:linear-gradient(90deg,#000 0,#000 84%,transparent 100%);mask-image:linear-gradient(90deg,#000 0,#000 84%,transparent 100%);
   opacity:0;transition:opacity var(--mr-dur) var(--mr-ease);pointer-events:none;
 }
 .control-cluster.actions.mr-top-track.mr-track-bg-on::before{opacity:1!important;}
@@ -2354,29 +2354,11 @@ body.phone-shell #empty-home .daily-review-card{
   min-height: min(46vh, 340px)!important;
 }
 
-/* ===== v84：返回首页信息条落位视觉连续 =====
-   1) 底栏封面原来固定 44px，顶部播放条是 --mr-row-h（本机 47px）→ 落位瞬间封面缩 3px；
-      改成两边都用 --mr-row-h。
-   2) 飞行时行的背景是 .mr-top-track::before 渐变，落位换 class 时瞬间消失 → 看着像闪一下；
-      给底栏里的行补一条同款 ::before（默认 opacity:0，带过渡），落位去掉 class 时淡出。 */
+/* ===== v84：落位视觉连续（封面同源尺寸）=====
+   底栏封面原来固定 44px、顶部播放条是 --mr-row-h（本机 47px）→ 落位瞬间封面缩 3px；
+   改成两边同源。落位后不再给行加背景层（那层会盖住右侧 DIY 按钮，恢复时看着像闪一下）。 */
 body.phone-shell #bottom-bar .control-cover{
   width: var(--mr-row-h, 44px)!important;
   height: var(--mr-row-h, 44px)!important;
 }
-body.phone-shell #bottom-bar .control-cluster.actions{
-  position: relative!important;
-}
-body.phone-shell #bottom-bar .control-cluster.actions::before{
-  content:''!important;
-  position:absolute!important;
-  inset:-6px -8px!important;
-  border-radius:15px!important;
-  z-index:-1!important;
-  background:linear-gradient(180deg,rgba(6,12,12,.72),rgba(6,12,12,0))!important;
-  opacity:0!important;
-  transition:opacity .2s ease!important;
-  pointer-events:none!important;
-}
-body.phone-shell #bottom-bar .control-cluster.actions.mr-track-bg-on::before{
-  opacity:1!important;
-}
+
