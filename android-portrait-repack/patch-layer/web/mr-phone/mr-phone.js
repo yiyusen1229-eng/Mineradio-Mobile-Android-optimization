@@ -115,7 +115,7 @@
       hideFab();
       bindFab(document.getElementById('fx-fab'));
       updateProgressTimes();
-      try { patchFallbackNotice(); patchPlaylistEdgeTrigger(); } catch (e) { }
+      try { patchFallbackNotice(); patchPlaylistEdgeTrigger(); patchLyricOnlineSearch(); } catch (e) { }
     } catch (e) { }
   }
 
@@ -126,6 +126,11 @@
       WATCH_TICK++;
       try { noticeWatch(); } catch (e) { }          /* 500ms */
       try { panelKbFit(); } catch (e) { }
+      try {
+        /* 在线歌词模态 / DIY 面板打开时，4UI 弹层一律收起（兜底，防宿主换入口打开） */
+        var lom = document.getElementById('lyric-online-modal');
+        if ((lom && lom.classList.contains('show')) || window.__mrDiyOpen) closeAllPopovers();
+      } catch (e) { }
       if (WATCH_TICK % 4 === 0) classWatch();       /* 2.0s */
       if (WATCH_TICK % 5 === 0) layoutWatch();      /* 2.5s */
     }, 500);
@@ -1402,12 +1407,48 @@
     window.setTimeout(function () { if (ctl && !ctl.__mrPopOpen) hidePopover(pop); }, 80);
   }
 
-  function togglePopover(ctl, pop) {
+  /* v82：只关两个 4UI 弹层（不动在线歌词模态） */
+  function closeAllPopovers() {
+    var refs = popoverRefs();
+    if (refs.volCtl && refs.volCtl.__mrPopOpen) closePopover(refs.volCtl, refs.volPop);
+    if (refs.lyrCtl && refs.lyrCtl.__mrPopOpen) closePopover(refs.lyrCtl, refs.lyrPop);
+    if (refs.volCtl) refs.volCtl.__mrPopOpen = false;
+    if (refs.lyrCtl) refs.lyrCtl.__mrPopOpen = false;
+    hidePopover(refs.volPop);
+    hidePopover(refs.lyrPop);
+  }
+
+  /* v82：两个弹层互斥——打开一个就先收起另一个。
+     （原来「词」和「音量」可以同时展开，在底栏上方叠成一团。） */
+  function closeOtherPopover(keepKey) {
+    var refs = popoverRefs();
+    if (keepKey !== 'vol' && refs.volCtl && refs.volCtl.__mrPopOpen) closePopover(refs.volCtl, refs.volPop);
+    if (keepKey !== 'lyr' && refs.lyrCtl && refs.lyrCtl.__mrPopOpen) closePopover(refs.lyrCtl, refs.lyrPop);
+    if (!keepKey) {
+      /* 只收 4UI 弹层；在线歌词模态不在这个函数里动（否则看门狗每 500ms 会把它关掉） */
+      return;
+    }
+  }
+
+  function togglePopover(which) {
+    var refs = popoverRefs();
+    var ctl = which === 'vol' ? refs.volCtl : refs.lyrCtl;
+    var pop = which === 'vol' ? refs.volPop : refs.lyrPop;
+    if (!ctl || !pop) return;
+    closeOtherPopover(which);
     var openNow = !ctl.__mrPopOpen;
     ctl.__mrPopOpen = openNow;
     ctl.classList.toggle('mr-open', openNow);
-    if (openNow) placePopover(ctl, pop);
-    else closePopover(ctl, pop);
+    if (openNow) {
+      /* 打开前再确认另一个是关的（closePopover 有 80ms 延迟兜底，这里立即隐藏） */
+      var otherCtl = which === 'vol' ? refs.lyrCtl : refs.volCtl;
+      var otherPop = which === 'vol' ? refs.lyrPop : refs.volPop;
+      if (otherCtl) { otherCtl.__mrPopOpen = false; otherCtl.classList.remove('mr-open'); }
+      hidePopover(otherPop);
+      placePopover(ctl, pop);
+    } else {
+      closePopover(ctl, pop);
+    }
   }
 
   /* fy: 宿主可能在自己的 pointerdown/touchstart 里就把弹层打开，捕获阶段先掐断 */
@@ -1427,20 +1468,35 @@
       if (isVol && refs.volCtl && refs.volPop) {
         ev.stopPropagation();
         try { ev.preventDefault(); } catch (e) { }
-        togglePopover(refs.volCtl, refs.volPop);
+        togglePopover('vol');
         return;
       }
       var isLyr = t && t.closest ? t.closest('#lyrics-toggle-btn') : null;
       if (isLyr && refs.lyrCtl && refs.lyrPop) {
         ev.stopPropagation();
         try { ev.preventDefault(); } catch (e) { }
-        togglePopover(refs.lyrCtl, refs.lyrPop);
+        togglePopover('lyr');
         return;
       }
       /* 点其它地方：把已展开的弹层收起 */
       if (refs.volCtl && refs.volCtl.__mrPopOpen && !(t && t.closest && t.closest('.volume-popover'))) closePopover(refs.volCtl, refs.volPop);
       if (refs.lyrCtl && refs.lyrCtl.__mrPopOpen && !(t && t.closest && t.closest('#lyric-timing-popover'))) closePopover(refs.lyrCtl, refs.lyrPop);
     }, true);
+  }
+
+  /* v82：宿主「搜索歌词」打开在线歌词模态前，先收掉 4UI 弹层 / DIY 面板，
+     否则模态（z-index 原本只有 260）会被 4UI 弹层（z-index 9600）盖住。 */
+  function patchLyricOnlineSearch() {
+    if (window.__mrLyricSearchPatched) return true;
+    if (typeof window.openLyricOnlineSearch !== 'function') return false;
+    window.__mrLyricSearchPatched = 1;
+    var raw = window.openLyricOnlineSearch;
+    window.openLyricOnlineSearch = function () {
+      try { closeAllPopovers(); } catch (e) { }
+      try { if (window.__mrDiyOpen) setDiyPanel(false); } catch (e) { }
+      return raw.apply(this, arguments);
+    };
+    return true;
   }
 
   /* 登录页内联兜底：保证留边、圆角、可滚动，不顶边框 */

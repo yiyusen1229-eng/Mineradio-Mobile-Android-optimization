@@ -568,11 +568,11 @@
     gap: 8px;
   }
 
-  body.phone-shell #empty-home .daily-review-actions .daily-review-btn.ghost,
-  body.phone-shell #empty-home #home-dashboard-video-choose,
-  body.phone-shell #empty-home #home-dashboard-video-clear {
+  body.phone-shell #empty-home .daily-review-actions .daily-review-btn.ghost {
     display: none !important;
   }
+  /* v82：桌面端每日卡片的媒体按钮（选择/更换 MP4、移除视频）在手机端恢复显示，
+     之前被整条 display:none 掉了。清除按钮仍由宿主按「是否有视频」控制 hidden。 */
 
 
   /* 背景卡 filter + 按钮 backdrop-filter：点「换一条」时 Android 会整块黑闪 */
@@ -2274,4 +2274,79 @@ body.phone-shell .phone-chrome-slot{
 body.phone-shell #phone-chrome-more{
   width: var(--phone-chrome-height, 48px)!important;
   height: var(--phone-chrome-height, 48px)!important;
+}
+
+/* ===== v82：在线歌词搜索模态（手机端显示修复） =====
+   宿主 #lyric-online-modal 的 z-index 只有 260，会被 4UI 弹层（9600）/DIY 面板（8600）盖住；
+   面板本身是桌面尺寸（min(680px,92vw)+76vh），窄屏结果行会被切。 */
+body.phone-shell #lyric-online-modal.lyric-online-mask{
+  z-index: 9800!important;
+  display: flex!important;
+  align-items: center!important;
+  justify-content: center!important;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 12px calc(10px + env(safe-area-inset-bottom, 0px))!important;
+  background: rgba(3, 5, 9, .82)!important;
+  -webkit-backdrop-filter: none!important;
+  backdrop-filter: none!important;
+}
+body.phone-shell #lyric-online-modal.lyric-online-mask:not(.show){
+  display: none!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-panel{
+  width: 100%!important;
+  max-width: min(560px, 100%)!important;
+  max-height: calc(100dvh - 20px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))!important;
+  height: auto!important;
+  padding: 14px!important;
+  border-radius: 18px!important;
+  overflow: hidden!important;
+  grid-template-rows: auto auto auto minmax(0, 1fr)!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-results{
+  overflow-y: auto!important;
+  -webkit-overflow-scrolling: touch!important;
+  min-height: 0!important;
+  overscroll-behavior: contain;
+}
+body.phone-shell #lyric-online-modal .lyric-online-result-row{
+  grid-template-columns: minmax(0, 1fr) auto auto!important;
+  gap: 8px!important;
+  padding: 8px 10px!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-result-row .lyric-online-tag{
+  font-size: 10.5px!important;
+  padding: 2px 7px!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-result-row .lyric-online-btn{
+  height: 30px!important;
+  padding: 0 11px!important;
+  font-size: 11.5px!important;
+  flex: 0 0 auto!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-search-row input{
+  min-width: 0!important;
+  font-size: 14px!important;
+}
+
+/* ===== v82：首页每日卡片的媒体按钮（手机端排版） ===== */
+body.phone-shell #empty-home .daily-review-actions{
+  display: flex!important;
+  flex-wrap: wrap!important;
+  gap: 8px!important;
+  margin-top: 10px!important;
+}
+body.phone-shell #empty-home .daily-review-actions button{
+  min-height: 32px!important;
+  padding: 0 12px!important;
+  font-size: 12px!important;
+  line-height: 1.2!important;
+  border-radius: 12px!important;
+  flex: 0 0 auto!important;
+  white-space: nowrap!important;
+}
+body.phone-shell #empty-home .daily-review-actions button[hidden]{
+  display: none!important;
+}
+body.phone-shell #empty-home .daily-review-card{
+  min-height: min(46vh, 340px)!important;
 }

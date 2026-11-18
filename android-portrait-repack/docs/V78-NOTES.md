@@ -181,3 +181,27 @@
 - `.phone-chrome-slot{top:calc(6px + env(safe-area-inset-top))}` 与搜索框顶对齐。
 
 **验证**：391×870 真机 → 搜索框 48×315 @ (8,52)、按钮 48×48 @ (331,52)：**gap=8、等高、顶对齐**；CDP 模拟 320/340/360/375/390/400/412/420/432/440/460/480/500/540/600/720 共 16 档视口，全部 `overlap=false`、`gap≥8`、高度恒 48；菜单下拉仍锚在按钮下方（right 对齐）；搜索展开/键盘布局正常；回归 23/23 PASS、10 组自适应矩阵无溢出。
+---
+
+## 11. v82：弹层互斥 + 在线歌词搜索显示 + 首页媒体按钮
+
+### 11.1 「词」和「音量」弹层可同时打开、重叠
+`bindPlayerPopovers` 里两个 toggle 各管各的。改为 `togglePopover('vol' | 'lyr')`：
+打开前先 `closeOtherPopover()` 收起另一个（并把它的 `__mrPopOpen`/`mr-open` 清掉、立即 `hidePopover`，不等 80ms 兜底）。
+另外加了看门狗兜底：DIY 面板或在线歌词模态打开时，`closeAllPopovers()` 收起 4UI 弹层。
+
+### 11.2 「搜索歌词」弹窗不显示 / 被歌词校准弹层盖住
+- 宿主 `#lyric-online-modal`（`.lyric-online-mask`）的 `z-index` 只有 **260**，而 4UI 弹层是 9600、DIY 面板 8600、搜索区 9000 → 弹窗永远在下面；
+- 打开时旧弹层还开着，于是「弹窗被歌词校准弹层压住」；
+- 面板是桌面尺寸（`min(680px,92vw)`、`76vh`），窄屏结果行的「应用」按钮会被面板右边切掉。
+
+修法：
+1. 包装 `window.openLyricOnlineSearch`：先 `closeAllPopovers()` + 关 DIY 面板，再调宿主原函数；
+2. phone.css 里 `body.phone-shell #lyric-online-modal.lyric-online-mask{z-index:9800}`，面板 `width:100%; max-width:min(560px,100%)`，`max-height:calc(100dvh - 20px - safe-top - safe-bottom)`，`grid-template-rows:auto auto auto minmax(0,1fr)`，结果区 `overflow-y:auto`；
+3. 结果行改 `grid-template-columns:minmax(0,1fr) auto auto`、缩小标签/按钮尺寸。
+
+实测：391×870 下弹窗 12~380 居中、结果 24 条，行宽 338 不越界；点输入框弹键盘（内高 533）后面板 56~524 自适应，行内「应用」完整可见。
+
+### 11.3 手机端首页「媒体」按钮（选择/更换 MP4、移除视频）
+桌面每日卡片有 `#home-dashboard-video-choose`（选择/更换 MP4）、`#home-dashboard-video-clear`（移除视频，宿主按是否有视频切 hidden），但 phone.css 早期把它们和 `.daily-review-btn.ghost` 一起 `display:none` 掉了。
+v82 只保留 ghost 的隐藏，恢复两个视频按钮，并按手机排版（32px 高 / 12px 字号 / 换行 / 圆角 12）。实测：首页卡片恢复「换一条 / 选择 MP4 / 展开播放器控制台」（未选视频时「移除视频」按宿主逻辑隐藏），点「选择 MP4」弹出系统文件/视频选择器（com.android.photopicker），可选 MP4；宿主用 IndexedDB 存视频 + 300MB 上限。
