@@ -2538,3 +2538,34 @@ body.phone-shell #fx-panel #fx-panel-tabs button.active{
   flex: 1 1 auto!important; padding: 7px 0!important; border-radius: 11px!important; font-size: 11.5px!important;
   color: rgba(248,244,238,.92)!important; background: rgba(255,255,255,.08)!important; border: 1px solid rgba(255,255,255,.1)!important;
 }
+
+/* ===== v96：热键按钮移除 + 平台推荐弹层动画 + 今日聆听卡片非交互 ===== */
+body.phone-shell #hotkey-settings-btn,
+body.phone-shell #hotkey-modal{ display: none!important; }
+body.phone-shell #fx-panel .fx-head-actions:empty{ display: none!important; }
+/* 今日聆听指标卡：纯展示（源 APK 无点击功能），禁掉指针手势与点击反馈 */
+body.phone-shell #home-insight-dock .home-listen-metric{
+  pointer-events: none!important;
+  cursor: default!important;
+}
+body.phone-shell #home-insight-dock .home-listen-card{ cursor: default!important; }
+
+@keyframes mrPanelMaskIn{ from{ opacity: 0 } to{ opacity: 1 } }
+@keyframes mrPanelMaskOut{ from{ opacity: 1 } to{ opacity: 0 } }
+@keyframes mrPanelSheetIn{ from{ transform: translate3d(0, 30px, 0) scale(.984); opacity: .55 } to{ transform: translate3d(0, 0, 0) scale(1); opacity: 1 } }
+@keyframes mrPanelSheetOut{ from{ transform: translate3d(0, 0, 0) scale(1); opacity: 1 } to{ transform: translate3d(0, 24px, 0) scale(.988); opacity: 0 } }
+
+body.phone-shell #home-platform-recommend-mask.show{
+  animation: mrPanelMaskIn .2s ease-out both!important;
+}
+body.phone-shell #home-platform-recommend-mask.show .home-platform-recommend-modal{
+  animation: mrPanelSheetIn .3s cubic-bezier(.22,.9,.25,1) both!important;
+  will-change: transform, opacity!important;
+}
+body.phone-shell #home-platform-recommend-mask.show.mr-panel-closing{
+  animation: mrPanelMaskOut .17s ease-in both!important;
+  pointer-events: none!important;
+}
+body.phone-shell #home-platform-recommend-mask.show.mr-panel-closing .home-platform-recommend-modal{
+  animation: mrPanelSheetOut .17s ease-in both!important;
+}

@@ -576,3 +576,34 @@ v88 的搜索超时会返回哨兵 `{ok:false,error:'MR_SEARCH_TIMEOUT',songs:[]
 ### 24.3 验证
 - 面板正常显示（截图）；`likeSkip`、`lyricDeferred` 计数可用；
 - 搜索 12 条结果、回归 **23/23 PASS**、自适应矩阵无溢出。
+---
+
+## 25. v96：删热键面板 / 平台推荐弹层动画 / 今日聆听卡片误触
+
+### 25.1 删除 DIY 面板「热键」
+- 删 `#hotkey-settings-btn`，若 `.fx-head-actions` 空了就隐藏（面板标题栏恢复满宽）；
+- 删 `#hotkey-modal`（热键设置面板），把 `openHotkeySettings` / `closeHotkeySettings` 置为空函数；
+- 从 `fxConsoleRegistry`（控制台搜索索引）里移除「热键设置」条目，已渲染的搜索结果里也清掉；
+- CSS 兜底：`#hotkey-settings-btn`、`#hotkey-modal` 一律 `display:none`。
+手机没有物理键盘，热键引擎本身留着没有任何入口，不影响功能。
+
+### 25.2 音乐发现 / 平台推荐 弹层动画
+两个卡片（`openHomeDashboardCharts` / `openHomeDashboardRadio`）打开的其实是同一个弹层
+`#home-platform-recommend-mask`，宿主只做 `classList.add('show')`（display:none → flex），所以是硬切。手机层补：
+- 遮罩 `mrPanelMaskIn`：0.2s 淡入；
+- 面板 `mrPanelSheetIn`：0.3s `translateY(30px)→0` + `scale(.984)→1`（cubic-bezier(.22,.9,.25,1)）；
+- 关闭包装 `closeHomePlatformRecommendations`：先加 `.mr-panel-closing`（170ms 淡出+下移），再走原关闭逻辑。
+
+### 25.3 今日聆听三块指标卡（源 APK 里是什么）
+`#home-insight-dock` 里三个 `.home-listen-metric`：
+- `#home-today-time` **聆听时长**（今日累计播放时长）
+- `#home-today-count` **今日歌曲**（当日播放首数）
+- `#home-today-artist` **最常听歌手** + `#home-today-streak`（连续聆听天数）
+
+它们都是**纯展示 `<div>`，源 APK 里没有点击行为**；旁边「查看偏好」（`.home-insight-link`）才是按钮，
+`openHomeInsight()` 会用最常听歌手/歌曲名**直接发起搜索**（实测点击后搜索框变「津田朱里」、出 18 条结果），
+并不是打开偏好面板。
+
+点了会跳播放页的原因：宿主「点首页空白处 = 收起首页」的判定 `isHomeBlankDismissClick` 把这几块 div 当成空白，
+再被手机层「离开首页→进播放页」的钩子接上。修复：包装 `isHomeBlankDismissClick`，点击落在
+`#home-insight-dock / .home-hero / .home-card / .home-discovery-strip / .home-ranking-entry` 等区域时一律返回 false。

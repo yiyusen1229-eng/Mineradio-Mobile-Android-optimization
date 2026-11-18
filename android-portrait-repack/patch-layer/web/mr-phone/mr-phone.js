@@ -1269,6 +1269,104 @@
     return true;
   }
 
+
+  /* ===== v96：删热键面板 / 平台推荐弹层动画 / 今日聆听卡片误触修复 ===== */
+
+  /* ---- 1) 热键按钮与热键设置面板（手机没有键盘，面板是死重）---- */
+  function mrRemoveHotkeyUi() {
+    try {
+      var btn = document.getElementById('hotkey-settings-btn');
+      if (btn) {
+        var wrap = btn.parentElement;
+        try { btn.remove(); } catch (e) { btn.parentNode && btn.parentNode.removeChild(btn); }
+        if (wrap && wrap.classList && wrap.classList.contains('fx-head-actions') && !wrap.children.length) {
+          wrap.style.display = 'none';
+        }
+      }
+      var modal = document.getElementById('hotkey-modal');
+      if (modal) { try { modal.remove(); } catch (e) { modal.parentNode && modal.parentNode.removeChild(modal); } }
+      /* 控制台搜索索引里的「热键设置」条目 */
+      try {
+        var reg = window.fxConsoleRegistry;
+        if (Array.isArray(reg)) {
+          for (var i = reg.length - 1; i >= 0; i--) {
+            var entry = reg[i];
+            var el = entry && entry.element;
+            var byId = el && el.id === 'hotkey-settings-btn';
+            var byTitle = entry && /热键/.test(String(entry.title || ''));
+            if (byId || byTitle) reg.splice(i, 1);
+          }
+        }
+      } catch (e) { }
+      /* 搜索框里已经渲染出来的热键条目也清掉 */
+      try {
+        var list = document.querySelectorAll('#fx-console-search-results .fx-console-search-result');
+        for (var k = 0; k < list.length; k++) {
+          if (/热键/.test(list[k].textContent || '')) list[k].remove();
+        }
+      } catch (e) { }
+    } catch (e) { }
+  }
+  function patchHotkeyRemoval() {
+    if (window.__mrHotkeyRemoved) return true;
+    window.__mrHotkeyRemoved = 1;
+    try {
+      window.openHotkeySettings = function () { /* v96：热键面板已移除 */ };
+      window.closeHotkeySettings = function () { };
+    } catch (e) { }
+    mrRemoveHotkeyUi();
+    return true;
+  }
+
+  /* ---- 2) 平台推荐 / 音乐发现 弹层动画 ---- */
+  function patchPlatformPanelAnimation() {
+    if (window.__mrPlatformAnimPatched) return true;
+    window.__mrPlatformAnimPatched = 1;
+    var mask = document.getElementById('home-platform-recommend-mask');
+    if (!mask) return true;
+    /* 打开动画交给 CSS（.show 触发 keyframes），这里只给关闭补 170ms 淡出 */
+    if (typeof window.closeHomePlatformRecommendations === 'function') {
+      var rawClose = window.closeHomePlatformRecommendations;
+      window.closeHomePlatformRecommendations = function () {
+        try {
+          var m = document.getElementById('home-platform-recommend-mask');
+          if (m && m.classList.contains('show') && !m.classList.contains('mr-panel-closing')) {
+            m.classList.add('mr-panel-closing');
+            window.setTimeout(function () {
+              try {
+                m.classList.remove('mr-panel-closing');
+                rawClose.call(window);
+              } catch (e) { }
+            }, 170);
+            return;
+          }
+        } catch (e) { }
+        return rawClose.apply(this, arguments);
+      };
+    }
+    return true;
+  }
+
+  /* ---- 3) 今日聆听指标卡：源 APK 里是纯展示，不该触发「点空白处离开首页」---- */
+  function patchHomeBlankDismiss() {
+    if (window.__mrBlankDismissPatched) return true;
+    if (typeof window.isHomeBlankDismissClick !== 'function') return false;
+    window.__mrBlankDismissPatched = 1;
+    var raw = window.isHomeBlankDismissClick;
+    window.isHomeBlankDismissClick = function (e) {
+      try {
+        var t = e && e.target;
+        if (t && t.closest &&
+            t.closest('#home-insight-dock, .home-insight-card, .home-listen-card, .home-listen-metric, ' +
+              '.home-discovery-strip, .home-hero, .home-card, .home-ranking-entry, #home-today-time, #home-today-count, #home-today-artist')) {
+          return false;
+        }
+      } catch (err) { }
+      return raw.apply(this, arguments);
+    };
+    return true;
+  }
+
   function startWatchdog() {
     if (window.__mrWatchdog) return;
     window.__mrWatchdog = 1;
@@ -1279,6 +1377,9 @@
       try { noticeWatch(); } catch (e) { }          /* 500ms：无通知时只做 2 次 null 判断 */
       try { panelKbFit(); } catch (e) { }           /* DIY 面板没开时立即返回 */
       if (WATCH_TICK % 4 === 0) {
+        try { if (document.getElementById('hotkey-settings-btn') || document.getElementById('hotkey-modal')) mrRemoveHotkeyUi(); } catch (e) { }
+        try { patchPlatformPanelAnimation(); } catch (e) { }
+        try { patchHomeBlankDismiss(); } catch (e) { }
         /* 2.0s：吸顶变量 / 补丁自愈（宿主换 fetch、重建面板时才需要重装） */
         try { updatePlaylistStickyVars(); } catch (e) { }
         try { installApiFetchCache(); } catch (e) { }
@@ -3130,6 +3231,10 @@
     try { patchHomeHeroMedia(); } catch (e) { }
     try { patchProgressiveSearch(); } catch (e) { }
     try { patchLikeStatusSync(); } catch (e) { }
+    try { patchHotkeyRemoval(); } catch (e) { }
+    try { patchPlatformPanelAnimation(); } catch (e) { }
+    try { patchHomeBlankDismiss(); } catch (e) { }
+    try { window.setTimeout(function () { try { patchHotkeyRemoval(); } catch (e) { } try { patchPlatformPanelAnimation(); } catch (e) { } try { patchHomeBlankDismiss(); } catch (e) { } }, 2000); } catch (e) { }
     try { patchNetStatsUi(); } catch (e) { }
     try { window.setTimeout(function () { try { patchLikeStatusSync(); } catch (e) { } try { patchNetStatsUi(); } catch (e) { } }, 2500); } catch (e) { }
     try { patchNextTrackPrefetch(); } catch (e) { }
