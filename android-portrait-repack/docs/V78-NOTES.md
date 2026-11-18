@@ -660,3 +660,28 @@ v94 起已修：缓存 DB 换 `mr-api-cache-v2`、哨兵不存不读、空结果
 
 ### 27.3 音乐发现 / 平台推荐
 从 v96 的 0.2s / 0.3s 统一到 0.34s open + 0.22s close，与 DIY 面板一致，手感更连贯。
+---
+
+## 28. v99：弹层层级修正 + 歌词「音 / 译」切换
+
+### 28.1 头像 UI 盖在弹层上
+宿主 `.modal-mask` 的 z-index 是 50，而手机 chrome（头像、搜索栏、三点）是 9000，所以每日推荐/最近播放/平台推荐弹层会被压在下面。
+修复：
+- `#daily-recommend-panel` / `#listen-history-panel` / `#home-platform-recommend-mask` → `z-index: 9500`；
+- 弹层打开时用 `body:has(#xxx.show) #phone-chrome-slot, #search-area, #user-btn { display:none }` 收起顶部 chrome。
+
+### 28.2 歌词「音 / 译」
+宿主已有「双语翻译」能力：`setLyricTranslationMode('off'|'current'|'dual'|'multi')`，
+歌词行上的 `translation` 字段由 provider 的 `tlyric` 解析而来（`buildLyricTranslationPayload` + `attachLyricTranslations`），
+但**没有注音（罗马音）**。
+
+手机层新增：
+- 播放页右侧竖排两个小圆按钮 **音 / 译**（`#mr-lyric-aux`，只在播放页显示）；
+- **译**：调用宿主 `setLyricTranslationMode('dual')`，显示歌词自带译文；再点关闭；
+- **音**：本地把假名转罗马音（平/片假名表 + 拗音组合 + 促音双写 + 长音），写进每行的 `translation` 字段
+  （宿主的舞台/行渲染第二行用的就是这个字段），汉字保留原样；
+- 包装 `setOriginalLyricsState` 保存原始歌词，切换模式时用原始歌词重算，避免反复转换；
+- 模式持久化在 `localStorage['mr-lyric-aux-mode-v1']`。
+
+实测：日文歌词 `地上を離れてゆく 鳥の群れ` → 第二行 `地上wo離reteyuku 鳥no群re`。
+注意：汉字读音需要词典，这部分做不到（保留汉字 + 假名罗马音），更好的方案是让 provider 把 `romalrc`/`roma` 字段也映射出来。

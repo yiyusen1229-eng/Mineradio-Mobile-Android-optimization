@@ -1606,6 +1606,167 @@
     return true;
   }
 
+
+  /* ===== v99：歌词 音/译 切换（注音=假名转罗马音；译文=宿主双语翻译） ===== */
+  var MR_AUX_MODE_KEY = 'mr-lyric-aux-mode-v1';
+  var mrLyricAux = { mode: 'off', state: null };
+
+  var MR_ROMA_TABLE = {
+    'あ':'a','い':'i','う':'u','え':'e','お':'o',
+    'か':'ka','き':'ki','く':'ku','け':'ke','こ':'ko',
+    'さ':'sa','し':'shi','す':'su','せ':'se','そ':'so',
+    'た':'ta','ち':'chi','つ':'tsu','て':'te','と':'to',
+    'な':'na','に':'ni','ぬ':'nu','ね':'ne','の':'no',
+    'は':'ha','ひ':'hi','ふ':'fu','へ':'he','ほ':'ho',
+    'ま':'ma','み':'mi','む':'mu','め':'me','も':'mo',
+    'や':'ya','ゆ':'yu','よ':'yo',
+    'ら':'ra','り':'ri','る':'ru','れ':'re','ろ':'ro',
+    'わ':'wa','を':'wo','ん':'n',
+    'が':'ga','ぎ':'gi','ぐ':'gu','げ':'ge','ご':'go',
+    'ざ':'za','じ':'ji','ず':'zu','ぜ':'ze','ぞ':'zo',
+    'だ':'da','ぢ':'ji','づ':'zu','で':'de','ど':'do',
+    'ば':'ba','び':'bi','ぶ':'bu','べ':'be','ぼ':'bo',
+    'ぱ':'pa','ぴ':'pi','ぷ':'pu','ぺ':'pe','ぽ':'po',
+    'ぁ':'a','ぃ':'i','ぅ':'u','ぇ':'e','ぉ':'o',
+    'ゃ':'ya','ゅ':'yu','ょ':'yo','ゎ':'wa','ゔ':'vu',
+    'ー':'-','・':' ','、':', ','。':'.','！':'!','？':'?','「':'"','」':'"','『':'"','』':'"','（':'(','）':')','　':' '
+  };
+  var MR_ROMA_COMBOS = {
+    'きゃ':'kya','きゅ':'kyu','きょ':'kyo','しゃ':'sha','しゅ':'shu','しょ':'sho','ちゃ':'cha','ちゅ':'chu','ちょ':'cho',
+    'にゃ':'nya','にゅ':'nyu','にょ':'nyo','ひゃ':'hya','ひゅ':'hyu','ひょ':'hyo','みゃ':'mya','みゅ':'myu','みょ':'myo',
+    'りゃ':'rya','りゅ':'ryu','りょ':'ryo','ぎゃ':'gya','ぎゅ':'gyu','ぎょ':'gyo','じゃ':'ja','じゅ':'ju','じょ':'jo',
+    'びゃ':'bya','びゅ':'byu','びょ':'byo','ぴゃ':'pya','ぴゅ':'pyu','ぴょ':'pyo','てぃ':'ti','でぃ':'di','ふぁ':'fa','ふぃ':'fi','ふぇ':'fe','ふぉ':'fo',
+    'うぇ':'we','うぃ':'wi','ゔぁ':'va','ゔぃ':'vi','ゔぇ':'ve','ゔぉ':'vo','しぇ':'she','ちぇ':'che','じぇ':'je'
+  };
+  function mrKanaToRomaji(input) {
+    var s = String(input || '');
+    if (!s) return '';
+    /* 片假名 → 平假名 */
+    s = s.replace(/[\u30a1-\u30f6]/g, function (ch) {
+      return String.fromCharCode(ch.charCodeAt(0) - 0x60);
+    });
+    var out = '';
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i);
+      var two = s.substr(i, 2);
+      if (two === 'っ') { /* 促音：双写下一个辅音 */ }
+      if (c === 'っ') {
+        var nxt = s.charAt(i + 1);
+        var nxt2 = s.substr(i + 1, 2);
+        var roma = MR_ROMA_COMBOS[nxt2] || MR_ROMA_TABLE[nxt] || MR_ROMA_TABLE[s.charAt(i + 1)] || '';
+        if (roma) out += roma.charAt(0);
+        continue;
+      }
+      if (MR_ROMA_COMBOS[two]) { out += MR_ROMA_COMBOS[two]; i++; continue; }
+      if (MR_ROMA_TABLE[c] !== undefined) { out += MR_ROMA_TABLE[c]; continue; }
+      out += c;
+    }
+    return out.replace(/\s+/g, ' ').trim();
+  }
+  function mrHasKana(text) {
+    return /[\u3040-\u30ff]/.test(String(text || ''));
+  }
+  /* 把注音写进 line.translation（宿主渲染第二行用的就是这个字段） */
+  function mrApplyRomajiLines(lines) {
+    var src = Array.isArray(lines) ? lines : [];
+    return src.map(function (line) {
+      var copy = {};
+      for (var k in line) { if (Object.prototype.hasOwnProperty.call(line, k)) copy[k] = line[k]; }
+      var text = String(copy.text || '');
+      if (text && mrHasKana(text)) {
+        var roma = mrKanaToRomaji(text);
+        if (roma && roma !== text) copy.translation = roma;
+      }
+      return copy;
+    });
+  }
+
+  function mrLyricAuxButtons() {
+    var box = document.getElementById('mr-lyric-aux');
+    if (box) return box;
+    box = document.createElement('div');
+    box.id = 'mr-lyric-aux';
+    box.innerHTML = '<button type="button" data-aux="roma" title="注音（罗马音）">音</button>' +
+      '<button type="button" data-aux="trans" title="译文">译</button>';
+    box.addEventListener('click', function (ev) {
+      var t = ev.target && ev.target.closest ? ev.target.closest('[data-aux]') : null;
+      if (!t) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var want = t.getAttribute('data-aux');
+      mrSetLyricAuxMode(mrLyricAux.mode === want ? 'off' : want);
+    });
+    document.body.appendChild(box);
+    return box;
+  }
+  function mrUpdateLyricAuxButtons() {
+    var box = mrLyricAuxButtons();
+    var on = mrLyricAux.mode;
+    box.classList.toggle('mr-aux-on-roma', on === 'roma');
+    box.classList.toggle('mr-aux-on-trans', on === 'trans');
+    try { box.style.display = stageIsPlayerPage() ? '' : 'none'; } catch (e) { }
+  }
+  function mrSetLyricAuxMode(mode) {
+    if (mode !== 'roma' && mode !== 'trans') mode = 'off';
+    mrLyricAux.mode = mode;
+    try { localStorage.setItem(MR_AUX_MODE_KEY, mode); } catch (e) { }
+    try {
+      if (typeof window.setLyricTranslationMode === 'function') {
+        window.setLyricTranslationMode(mode === 'trans' ? 'dual' : 'off');
+      }
+    } catch (e) { }
+    var st = mrLyricAux.state;
+    if (st) {
+      try {
+        window.setOriginalLyricsState(
+          mode === 'roma' ? mrApplyRomajiLines(st.lines) : st.lines,
+          st.hasKaraoke, st.timingSource, st.translationLines, st.translationSource
+        );
+        window.applyPreferredLyricsForCurrent(true);
+      } catch (e) { }
+    }
+    mrUpdateLyricAuxButtons();
+    if (typeof window.showToast === 'function') {
+      if (mode === 'roma') {
+        var has = false;
+        try { has = (st ? st.lines : []).some(function (l) { return mrHasKana(l && l.text); }); } catch (e) { }
+        window.showToast(has ? '已显示注音（罗马音）' : '这首歌没有日文假名，无法注音');
+      } else if (mode === 'trans') {
+        window.showToast('已显示译文（需要歌词自带翻译）');
+      } else {
+        window.showToast('已关闭音/译');
+      }
+    }
+  }
+
+  function patchLyricAux() {
+    if (window.__mrLyricAuxPatched) return true;
+    if (typeof window.setOriginalLyricsState !== 'function' || typeof window.applyPreferredLyricsForCurrent !== 'function') return false;
+    window.__mrLyricAuxPatched = 1;
+    try {
+      var saved = localStorage.getItem(MR_AUX_MODE_KEY);
+      if (saved === 'roma' || saved === 'trans') mrLyricAux.mode = saved;
+    } catch (e) { }
+    var rawSet = window.setOriginalLyricsState;
+    window.setOriginalLyricsState = function (lines, hasKaraoke, timingSource, translationLines, translationSource) {
+      var safeLines = Array.isArray(lines) ? lines : [];
+      mrLyricAux.state = {
+        lines: JSON.parse(JSON.stringify(safeLines)),
+        hasKaraoke: hasKaraoke,
+        timingSource: timingSource,
+        translationLines: Array.isArray(translationLines) ? JSON.parse(JSON.stringify(translationLines)) : [],
+        translationSource: translationSource
+      };
+      var useLines = mrLyricAux.mode === 'roma' ? mrApplyRomajiLines(safeLines) : safeLines;
+      return rawSet.call(this, useLines, hasKaraoke, timingSource, translationLines, translationSource);
+    };
+    /* 进播放页/换歌后刷新按钮可见性与状态 */
+    document.addEventListener('click', function () { window.setTimeout(mrUpdateLyricAuxButtons, 320); }, true);
+    window.setInterval(function () { try { mrUpdateLyricAuxButtons(); } catch (e) { } }, 1000);
+    mrUpdateLyricAuxButtons();
+    return true;
+  }
+
   function startWatchdog() {
     if (window.__mrWatchdog) return;
     window.__mrWatchdog = 1;
@@ -1619,6 +1780,8 @@
         try { if (document.getElementById('hotkey-settings-btn') || document.getElementById('hotkey-modal')) mrRemoveHotkeyUi(); } catch (e) { }
         try { patchHomeQuickCards(); } catch (e) { }
         try { patchHomeLibraryEntry(); } catch (e) { }
+        try { patchLyricAux(); } catch (e) { }
+    try { patchLyricAux(); } catch (e) { }
         try { patchDiscoveryPanelsAnimation(); } catch (e) { }
         try { patchImportMenuButton(); } catch (e) { }
         try { patchSearchPauseForVoice(); } catch (e) { }
