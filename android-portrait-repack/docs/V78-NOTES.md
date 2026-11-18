@@ -711,3 +711,23 @@ v94 起已修：缓存 DB 换 `mr-api-cache-v2`、哨兵不存不读、空结果
 - 两者都没有（如中文歌且无翻译）→ **整组隐藏**，并把模式复位为 off。
 
 实测：日文《深愛》（47 行含假名 + 36 行翻译）→ 音、译都出现；中文歌只有翻译时只出现「译」。
+---
+
+## 30. v101：注音改用平台自带罗马音（netease romalrc / QQ roma）
+
+v99 的「音」只是本地把假名转罗马音，汉字保留原样（`地上wo離reteyuku`），而真实日语歌的罗马音注音
+在平台歌词里本来就有完整数据（含汉字读音）。v101 改为**优先取平台罗马音**：
+
+- 通过原生桥 `window.__mrBridgeRequest`（FoliaBridge/OkHttp，自动带 Cookie）直接请求上游：
+  - **网易云**：`https://music.163.com/api/song/lyric?id=<id>&lv=-1&kv=-1&tv=-1&rv=1` → `romalrc.lyric`；
+  - **QQ 音乐**：`https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=<mid>&format=json&nobase64=1` → `roma`；
+- LRC 解析成 `时间→文本`，用「最近时间戳 ±0.6s」贴到宿主歌词行的 `translation` 字段（宿主渲染第二行就用它）；
+- 结果缓存 `localStorage['mr-provider-roma-v1']`（最多 160 首）；切歌或打开「音」时异步拉取，命中即重绘；
+- 平台没有 roma（酷狗多数歌）时退回 v99 的假名转换，至少假名部分有读音。
+
+实测网易云《夜に駆ける》：
+```
+沈むように溶けてゆくように  →  shi zu mu yo u ni to ke te yu ku yo u ni
+二人だけの空が広がる夜に    →  fu ta ri da ke no so ra ga hi ro ga ru yo ru n
+```
+（汉字读音来自平台 romalrc，缓存 key `netease:1409311773`）
