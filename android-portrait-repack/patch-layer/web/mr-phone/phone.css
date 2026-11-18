@@ -1,3 +1,12 @@
+/* ================= Mineradio 手机层样式（patch-layer）=================
+ * 结构（按顺序）：
+ *   §1  基础变量 / 壳层状态            §2  顶部 chrome（搜索框 + 三点菜单）
+ *   §3  首页（每日卡片 / 媒体按钮）     §4  底栏 / 歌曲信息条
+ *   §5  播放页 stage / 4UI 弹层        §6  歌单/队列面板（吸顶、虚拟列表）
+ *   §7  搜索浮层 / 在线歌词搜索         §8  DIY 面板 / 控件
+ *   §9  安全区 / 分层修复（v77–v90 覆盖段）
+ * 说明：后段带 vXX 注释的规则是逐版修复，删规则前先查 DEVLOG 对应版本原因。
+ * ==================================================================== */
 /* Mineradio phone layer (merged) */
 
 /* ===== mobile-shell.css ===== */
@@ -121,7 +130,6 @@
     padding: 0 !important;
   }
 
-
   body.phone-shell .modal-mask.show .modal {
     animation: none !important;
   }
@@ -130,11 +138,6 @@
     display: none !important;
     opacity: 0 !important;
   }
-
-
-
-
-
 
   body.phone-shell .login-auth-actions {
     display: grid !important;
@@ -210,8 +213,6 @@
     z-index: 47;
   }
 
-
-
   body.phone-shell .panel-tabs {
     overflow-x: auto;
     flex-wrap: nowrap;
@@ -226,8 +227,6 @@
   /* v79b：删除旧 DIY console sheet 覆盖（right:0!important 会把开态面板推到 right:0，
      与 V77 的 right:12px 冲突，看起来像另一套旧布局）。 */
 
-
-
   body.phone-shell .preset-card,
   body.phone-shell .fx-mini-btn {
     min-height: 40px;
@@ -237,14 +236,7 @@
 
   /* —— Bottom player reinforce —— */
 
-
-
-
   /* —— Folia wall / lyrics —— */
-
-
-
-
 
   /* Folia 海报墙仍隐藏 FAB；歌词舞台保留 DIY 控制台入口 */
 
@@ -311,10 +303,6 @@
     flex-shrink: 0;
   }
 
-
-
-
-
   /* Drop overlay */
   body.phone-shell #drop-overlay .drop-text {
     font-size: 16px;
@@ -335,8 +323,6 @@
     bottom: calc(24px + var(--phone-safe-bottom)) !important;
   }
 }
-
-
 
 /* ===== mobile-home.css ===== */
 /* Phone Home + chrome — desktop unchanged outside @media / .phone-shell */
@@ -400,7 +386,6 @@
     border-radius: 16px;
     padding: 0 14px;
   }
-
 
   body.phone-shell #search-mode-tabs {
     margin-top: 6px;
@@ -529,7 +514,6 @@
     overflow-y: auto;
   }
 
-
   body.phone-shell #empty-home .empty-home-shell {
     display: flex;
     flex-direction: column;
@@ -552,7 +536,6 @@
     border-radius: 22px;
   }
 
-
   body.phone-shell #empty-home .daily-review-time {
     font-size: clamp(42px, 12vw, 56px);
   }
@@ -573,7 +556,6 @@
   }
   /* v82：桌面端每日卡片的媒体按钮（选择/更换 MP4、移除视频）在手机端恢复显示，
      之前被整条 display:none 掉了。清除按钮仍由宿主按「是否有视频」控制 hidden。 */
-
 
   /* 背景卡 filter + 按钮 backdrop-filter：点「换一条」时 Android 会整块黑闪 */
   body.phone-shell #empty-home .daily-review-card,
@@ -598,18 +580,12 @@
     transform: none !important;
   }
 
-
   body.phone-shell #empty-home .home-lock-media-el,
   body.phone-shell #empty-home .home-dashboard-video {
     background: transparent !important;
   }
 
   /* Primary CTA strip */
-
-
-
-
-
 
   /* Phone CTA replaces desktop quick art cards */
   body.phone-shell #empty-home .home-grid.home-quick-grid {
@@ -730,7 +706,6 @@
     border: 1px solid rgba(255, 255, 255, .08);
     overflow: hidden;
   }
-
 
   body.phone-shell #empty-home .home-listen-metric + .home-listen-metric {
     padding-left: 12px !important;
@@ -1055,8 +1030,6 @@
     display: none;
   }
 
-
-
   body.phone-shell .control-cluster.modes .lyrics-toggle-btn {
     order: 1;
   }
@@ -1140,8 +1113,6 @@
 
   /* Playlist → phone queue sheet */
 
-
-
   body.phone-shell #playlist-panel {
     top: auto !important;
     left: 0 !important;
@@ -1175,14 +1146,9 @@
     padding-top: 8px;
   }
 
-
-
-
-
   body.phone-shell #playlist-pin-btn {
     display: none !important;
   }
-
 
   body.phone-shell #playlist-panel .panel-tabs {
     flex: 0 0 auto;
@@ -1280,16 +1246,7 @@
   /* v79b：删除旧的「底部抽屉式面板」几何（top:auto/bottom:0/width:100%/translateY(110%)）。
      它就是用户看到的「之前的废案」之一；V77 基座 + V78 开/关态规则已完全取代。 */
 
-
   /* ========== Folia poster wall ========== */
-
-
-
-
-
-
-
-
 
   /* ========== Folia lyrics stage ========== */
 
@@ -1318,9 +1275,6 @@
   body.phone-shell.folia-stage-active #bottom-bar.visible {
     opacity: .94;
   }
-
-
-
 
   /* DIY 开启后右下角 FAB / 控制台在 Folia 歌词态仍可进 */
   body.phone-shell.folia-stage-active:not(.diy-mode) #fx-fab {
@@ -1361,7 +1315,6 @@
     display: none !important;
   }
 }
-
 
 /* ===== mobile-touch.css ===== */
 /* ============================================================
@@ -1537,7 +1490,6 @@
 }
 
 /* —— Landscape phone (wide + short) —— */
-
 
 /* ===== FIX_CSS ===== */
 body.phone-shell .phone-chrome-slot{position:fixed!important;
@@ -1736,7 +1688,7 @@ body.mr-return-home .mr-top-track{animation:mrTopOut .3s ease both!important;}
 
 @keyframes mrTopIn{from{transform:translateY(-160%);opacity:0}to{transform:none;opacity:1}}
 @keyframes mrTopOut{to{transform:translateY(-160%);opacity:0}}
-@keyframes mrRightIn{from{transform:translateX(150%);opacity:0}to{transform:none;opacity:1}}
+@keyframes mrRightIn{from{transform:translateX(150%);opacity:0}}
 @keyframes mrRightOut{from{transform:none;opacity:1}to{transform:translateX(150%);opacity:0}}
 @keyframes mrBarFold{0%{transform:translateY(0);opacity:1}42%{transform:translateY(135%);opacity:0}100%{transform:translateY(0);opacity:1}}
 /* ===== 底栏半透明 + 毛玻璃 ===== */
@@ -1751,7 +1703,7 @@ body.phone-shell #bottom-bar.visible .control-cluster{background:transparent!imp
 body.mr-player-entering #bottom-bar .control-cluster.actions{animation:mrTrackFold .24s cubic-bezier(.4,0,.6,1) both!important;}
 @keyframes mrBarOutDown{to{transform:translateY(90%);opacity:0}}
 @keyframes mrTrackFold{to{transform:translateY(34px);opacity:0}}
-@keyframes mrBarUp{from{transform:translateY(70%);opacity:0}to{transform:none;opacity:1}}
+@keyframes mrBarUp{from{transform:translateY(70%);opacity:0}}
 /* 播放页：右上角账号头像保持可见，填满歌曲信息条右侧空位 */
 /* 播放页：首页整体隐藏（作为内联样式失效时的兜底） */
 /* ===== 转场：进入播放页时首页/搜索先淡出，DIY 平滑移动 ===== */
@@ -1762,7 +1714,7 @@ body.phone-shell #fx-fab{transition:bottom .34s cubic-bezier(.22,.9,.25,1),right
 /* ===== 更顺滑：歌曲条高度收缩 + 播放页底栏淡入（不再缩放跳变） ===== */
 body.phone-shell #bottom-bar .control-cluster.actions{overflow:hidden!important;max-height:120px;transition:max-height .30s cubic-bezier(.22,.9,.25,1),opacity .28s ease,transform .30s cubic-bezier(.22,.9,.25,1)!important;}
 body.mr-player-entering #bottom-bar .control-cluster.actions{max-height:0!important;opacity:0!important;transform:translateY(14px)!important;}
-@keyframes mrFadeBar{from{opacity:0}to{opacity:1}}
+@keyframes mrFadeBar{from{opacity:0}}
 /* ===== 底栏改用纯 transition 滑入滑出（更顺滑） ===== */
 body.mr-player-page #bottom-bar{animation:none!important;}
 
@@ -2070,7 +2022,7 @@ body.phone-shell #mr-player-extras{
 }
 /* 顶部歌名条/搜索/提示：给左右刘海留安全区 */
 body.phone-shell #mr-top-track{right:calc(clamp(52px,14vw,72px) + env(safe-area-inset-right,0px))!important;}
-body.phone-shell #search-area{right:calc(clamp(52px,14vw,72px) + env(safe-area-inset-right,0px))!important;}
+
 body.phone-shell #toast{left:calc(16px + env(safe-area-inset-left,0px))!important;right:calc(16px + env(safe-area-inset-right,0px))!important;}
 /* 歌单浮层不再用「底栏 150px」死值：跟着底部栏高度走 */
 body.phone-shell #playlist-panel{bottom:calc(var(--mr-bar-h,150px) + 8px + var(--mr-sys-bottom, 22px))!important;}
@@ -2079,7 +2031,7 @@ body.phone-shell #empty-home{bottom:calc(var(--mr-bar-h,150px) - 12px + var(--mr
 /* 320 极窄屏：7 键挤不下时先把收藏键收进次级位（保留 5 键） */
 @media (max-width:340px){
   body.phone-shell #bottom-bar #heart-btn{display:none!important;}
-  body.phone-shell #bottom-bar #controls > .control-cluster.transport{gap:4px!important;}
+  
 }
 /* 短屏深色横屏：底栏压缩、extras/DIY 同步缩小 */
 @media (orientation:landscape) and (max-height:520px){
@@ -2117,9 +2069,7 @@ body.phone-shell #bottom-bar #mr-player-extras{
   right:calc(clamp(6px, 1.6vw, 12px) + var(--mr-ctrl-size) + 6px)!important;
 }
 @media (max-width:360px){
-  body.phone-shell #bottom-bar #mr-player-extras{
-    right:calc(6px + var(--mr-ctrl-size) + 6px)!important;
-  }
+  
 }
 @media (orientation:landscape) and (max-height:520px){
   body.phone-shell #bottom-bar #mr-player-extras{
@@ -2415,4 +2365,38 @@ body.phone-shell #playlist-panel .pl-detail-sticky{
   background: rgba(10, 14, 20, .975)!important;
   -webkit-backdrop-filter: none!important;
   backdrop-filter: none!important;
+}
+
+/* ===== v91：长列表滚动顺滑（离屏行跳过渲染/布局） =====
+   歌单/队列改成全量渲染后 DOM 有几百行，给每行开 content-visibility:auto，
+   滚动时只渲染视口附近的行，离屏行跳过布局与绘制。
+   contain-intrinsic-size 用各行的近似高度，避免滚动条长度跳动。 */
+body.phone-shell #pl-list .pl-card{
+  content-visibility: auto!important;
+  contain-intrinsic-size: auto 62px!important;
+}
+body.phone-shell #pl-list .pl-detail-row{
+  content-visibility: auto!important;
+  contain-intrinsic-size: auto 46px!important;
+}
+body.phone-shell #queue-list .queue-item{
+  content-visibility: auto!important;
+  contain-intrinsic-size: auto 74px!important;
+}
+body.phone-shell #search-results .search-result{
+  content-visibility: auto!important;
+  contain-intrinsic-size: auto 70px!important;
+}
+/* 列表容器：竖向手势交给浏览器滚动，去掉点击高亮闪 */
+body.phone-shell #playlist-panel,
+body.phone-shell #search-results,
+body.phone-shell #queue-list,
+body.phone-shell #pl-list{
+  touch-action: pan-y!important;
+  -webkit-tap-highlight-color: transparent!important;
+}
+body.phone-shell #playlist-panel *,
+body.phone-shell #queue-list *,
+body.phone-shell #pl-list *{
+  -webkit-tap-highlight-color: transparent!important;
 }

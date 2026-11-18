@@ -539,18 +539,26 @@
     if (window.__mrWatchdog) return;
     window.__mrWatchdog = 1;
     window.setInterval(function () {
+      /* v91：后台（WebView 不可见）不跑任何检测，回到前台再继续 */
+      if (document.hidden) return;
       WATCH_TICK++;
-      try { noticeWatch(); } catch (e) { }          /* 500ms */
-      try { panelKbFit(); } catch (e) { }
-      try { updatePlaylistStickyVars(); } catch (e) { }
-      try { installApiFetchCache(); } catch (e) { }
-      try { installPlaylistFullRender(); } catch (e) { }
+      try { noticeWatch(); } catch (e) { }          /* 500ms：无通知时只做 2 次 null 判断 */
+      try { panelKbFit(); } catch (e) { }           /* DIY 面板没开时立即返回 */
+      if (WATCH_TICK % 4 === 0) {
+        /* 2.0s：吸顶变量 / 补丁自愈（宿主换 fetch、重建面板时才需要重装） */
+        try { updatePlaylistStickyVars(); } catch (e) { }
+        try { installApiFetchCache(); } catch (e) { }
+        try { installPlaylistFullRender(); } catch (e) { }
+        classWatch();
+      }
       try {
         /* 在线歌词模态 / DIY 面板打开时，4UI 弹层一律收起（兜底，防宿主换入口打开） */
-        var lom = document.getElementById('lyric-online-modal');
-        if ((lom && lom.classList.contains('show')) || window.__mrDiyOpen) closeAllPopovers();
+        if (window.__mrDiyOpen) closeAllPopovers();
+        else if (window.__mrLyricModalOpen || document.getElementById('lyric-online-modal')) {
+          var lom = document.getElementById('lyric-online-modal');
+          if (lom && lom.classList.contains('show')) closeAllPopovers();
+        }
       } catch (e) { }
-      if (WATCH_TICK % 4 === 0) classWatch();       /* 2.0s */
       if (WATCH_TICK % 5 === 0) layoutWatch();      /* 2.5s */
     }, 500);
   }
@@ -750,6 +758,8 @@
   var panelKbPinned = false;
   var layoutBaseH = 0;
   function panelKbFit() {
+    /* v91：DIY 面板没开、也没钉住过，就不用每 500ms 读 DOM/visualViewport */
+    if (!window.__mrDiyOpen && !panelKbPinned) return;
     var panel = document.getElementById('fx-panel');
     if (!panel) return;
     var layH = window.innerHeight || 0;
@@ -793,7 +803,11 @@
         window.visualViewport.addEventListener('resize', run);
         window.visualViewport.addEventListener('scroll', run);
       }
-      window.addEventListener('resize', run);
+      window.addEventListener('resize', function () {
+        var h = window.innerHeight || 0;
+        if (h > 200 && h > layoutBaseH) layoutBaseH = h;
+        run();
+      });
       document.addEventListener('focusin', function () { window.setTimeout(run, 60); window.setTimeout(run, 220); }, true);
       document.addEventListener('focusout', function () { window.setTimeout(run, 120); window.setTimeout(run, 320); }, true);
     } catch (e) { }
@@ -1652,32 +1666,6 @@
     return 44;
   }
 
-  /* v83：量「真正入栏后」的几何：临时把行插回底栏量一次，再放回 body（同一任务内完成，不闪） */
-  function measureDockedRect(actions) {
-    var controls = controlsEl();
-    var slot = findSlot();
-    if (!actions || !controls) return null;
-    var parent = actions.parentElement;
-    var cls = actions.className;
-    var hadTransform = actions.style.transform;
-    try {
-      actions.classList.remove('mr-top-track', 'mr-track-flying', 'mr-track-bg-on');
-      actions.style.removeProperty('transform');
-      actions.style.removeProperty('width');
-      actions.style.removeProperty('height');
-      if (slot) controls.insertBefore(actions, slot);
-      else controls.insertBefore(actions, controls.firstChild);
-      var r = actions.getBoundingClientRect();
-      /* 放回原来的父节点（body）并恢复 class / transform */
-      if (parent) parent.appendChild(actions);
-      actions.className = cls;
-      if (hadTransform) actions.style.transform = hadTransform;
-      return { left: r.left, top: r.top, width: r.width, height: r.height };
-    } catch (e) {
-      return null;
-    }
-  }
-
   /* ---- 转场结束后的宿主重活（绝不在动画窗口里跑） ---- */
   function runHostAfterEnter() {
     layoutPlayerExtrasPos();
@@ -2106,6 +2094,10 @@
   }
   function noticeWatch() {
     var refs = noticeEls();
+    /* v91：没有可见通知时直接返回，省掉每 500ms 一次 .mr-top-track 查询 + rect */
+    var stackHas = refs.stack && refs.stack.children.length > 0;
+    var noticeShown = refs.notice && refs.notice.classList.contains('show');
+    if (!stackHas && !noticeShown) return;
     var top = noticeTopY();
     var stack = refs.stack;
     if (stack) {
@@ -2225,6 +2217,7 @@
     try {
       var panel = document.getElementById('playlist-panel');
       if (!panel) return;
+      if (!panel.classList.contains('show') && !panel.classList.contains('peek')) return;
       var head = panel.querySelector('.playlist-panel-sticky');
       var h = head ? Math.round(head.getBoundingClientRect().height) : 0;
       if (h > 0) panel.style.setProperty('--mr-pl-head-h', h + 'px');

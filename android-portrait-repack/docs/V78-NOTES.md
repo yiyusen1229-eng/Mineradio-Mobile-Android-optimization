@@ -438,3 +438,35 @@ scroll（rAF 节流）里重新执行 `$ql.innerHTML = ...` → 所有 `.queue-i
   一旦「在播 + 页面仍停在首页 + 首页已隐藏」就收起搜索浮层并 `enterPlayerPage()`。
 
 **验证**：点搜索结果 → `mr-player-page` 出现、顶部歌条上移、歌词/舞台正常；返回键能回首页；回归 23/23 PASS。
+---
+
+## 20. v91：清理 / 轻量化 / 丝滑度
+
+### 20.1 审计结论
+| 项 | 结果 |
+|---|---|
+| patch JS 函数 | 132 个，只有 1 个死函数（`measureDockedRect`，v83 实验遗留）→ 删除 |
+| patch CSS 规则 | 454 条，3 条完全重复 + 3 条被同选择器后续 `!important` 完全覆盖 → 删除 |
+| APK 资源 | `assets/materials` 15 个目录**全部被引用**；`assets/public` 无 `.map/.md/.test` 等可删文件 |
+| APK 体积构成 | native `.so` 40MB、materials 34MB、字体 21MB（NotoSansCJK 18.6MB）、dex 16MB、web 24MB |
+
+### 20.2 实际改动
+1. **看门狗降步数**（500ms tick）：
+   - WebView 不可见（`document.hidden`）直接 return；
+   - `noticeWatch` 无可见通知时在查 rect 前返回；
+   - `panelKbFit` 在 DIY 面板没开且未钉住时立即返回（0 次 DOM 读取）；
+   - 吸顶变量 / 补丁自愈（fetch 缓存重装、列表全量渲染重装）从每 tick 降到每 2s。
+2. **长列表丝滑**：`.pl-card` / `.pl-detail-row` / `.queue-item` / `.search-result` 加
+   `content-visibility:auto` + `contain-intrinsic-size`（离屏行跳过布局绘制）；
+   列表容器 `touch-action:pan-y`、`-webkit-tap-highlight-color:transparent`。
+3. **结构可读性**：phone.css 顶部加「模块目录」注释（§1~§9），说明后段 vXX 覆盖规则要先查 DEVLOG。
+
+### 20.3 实测
+- 展开 297 首歌单，连续滚动 90 帧：**avg 16.5ms / p95 16.7ms / max 16.7ms / jank 0 帧**（锁 60fps）；
+- 空闲时看门狗每 tick 的 DOM 读取从 ~5 次 `getElementById` + 2 次 `getBoundingClientRect` 降到 0~2 次；
+- 回归 23/23 PASS、自适应矩阵无溢出；
+- APK 体积 75,927,359 B（未变，原因见 20.1）。
+
+### 20.4 想再减体积的两条路（需取舍）
+- 字体子集化：`NotoSansCJK-Regular.ttc` 18.6MB → 只保留常用汉字/假名 ≈ 3~4MB，**省 ~14MB**，但生僻字可能变豆腐；
+- 材质预设裁剪：`assets/materials` 34MB 按可视化场景裁剪，**省 20MB+**，但会废掉部分粒子/场景预设。
