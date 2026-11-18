@@ -301,19 +301,27 @@
      双击（或 320ms 内两次点击）才回正视角。底栏、4UI、DIY 的点击不受影响。 */
   /* v65：不再拦截舞台上的单击（那会连带把拖拽旋转/宿主点击一起吃掉）。
      只保留「双击回正视角」这一个增强；旋转交给 #mr-stage-overlay 的拖拽逻辑。 */
+  /* v76：播放页舞台上所有点击类响应一律屏蔽（宿主在 canvas 上挂了 click/dblclick，
+     会表现为「点左半边有反应」）。只拦 click/dblclick/mouseup/contextmenu，
+     不碰 pointerdown/touchstart/touchmove —— 单指拖拽旋转照常工作。 */
   function bindStageGuard() {
     if (window.__mrStageGuardBound) return;
     window.__mrStageGuardBound = 1;
-    function recenterCamera() {
-      try {
-        if (typeof window.recenterCamera === 'function') { window.recenterCamera(); return; }
-        if (window.orbit) window.orbit.recentering = true;
-      } catch (e) { }
+    function isStageTarget(t) {
+      if (!t || !t.closest) return false;
+      return !!t.closest('#canvas-container, canvas, #idle-guide-canvas, #mr-stage-overlay');
     }
-    document.addEventListener('dblclick', function (ev) {
-      if (!document.body.classList.contains('mr-player-page')) return;
-      recenterCamera();
-    }, true);
+    ['click', 'dblclick', 'mouseup', 'contextmenu'].forEach(function (type) {
+      window.addEventListener(type, function (ev) {
+        if (!document.body.classList.contains('mr-player-page')) return;
+        if (!isStageTarget(ev.target)) return;
+        try {
+          ev.stopImmediatePropagation();
+          ev.stopPropagation();
+          ev.preventDefault();
+        } catch (e) { }
+      }, true);
+    });
   }
 
   function bindTrackEnter() {
