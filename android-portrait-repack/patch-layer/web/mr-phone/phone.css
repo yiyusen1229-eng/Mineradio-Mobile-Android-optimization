@@ -2682,14 +2682,14 @@ body.phone-shell.mr-transitioning .control-cluster.actions.mr-top-track{
 body.phone-shell.mr-transitioning #empty-home{pointer-events:none!important;}
 /* ===== V64：DIY 挪进底栏右上；4UI 同在底栏右上并从 DIY 位置滑入滑出 ===== */
 body.phone-shell #mr-player-extras{
-  position:absolute!important;top:8px!important;right:60px!important;left:auto!important;bottom:auto!important;
+  position:absolute!important;top:8px!important;right:66px!important;left:auto!important;bottom:auto!important;
   height:var(--mr-row-h)!important;z-index:5!important;box-sizing:border-box!important;
   display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:6px!important;
-  opacity:0;visibility:hidden;pointer-events:none!important;transform:translateX(52px);
+  opacity:0;visibility:hidden;pointer-events:none!important;transform:translateX(58px);animation:none!important;
   transition:opacity .36s var(--mr-ease),transform .36s var(--mr-ease),visibility 0s linear .36s!important;
 }
 body.phone-shell.mr-player-page #mr-player-extras{
-  opacity:1!important;visibility:visible!important;pointer-events:auto!important;transform:none!important;
+  opacity:1!important;visibility:visible!important;pointer-events:auto!important;transform:none!important;animation:none!important;
   transition:opacity .36s var(--mr-ease),transform .36s var(--mr-ease),visibility 0s linear 0s!important;
 }
 body.phone-shell #fx-fab{border-radius:14px!important;}

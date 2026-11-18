@@ -174,6 +174,26 @@
 
   /* 播放页：拦截舞台画布上的点击/双击，避免 App 触发相机重置、隐藏控件 */
   /* 播放页舞台触摸层：单指拖动旋转视角，双指交给缩放 */
+  /* v65：DIY 键点击兜底（宿主绑在自己 DOM 上的 handler 在重排后可能不触发） */
+  function bindDiyTap() {
+    if (window.__mrDiyTap) return;
+    window.__mrDiyTap = 1;
+    document.addEventListener('click', function (ev) {
+      var fab = ev.target && ev.target.closest ? ev.target.closest('#fx-fab') : null;
+      if (!fab) return;
+      ev.stopPropagation();
+      try { ev.preventDefault(); } catch (e) { }
+      try {
+        /* DIY 的目标就是打开视觉控制台；优先直接开面板，最后才退回宿主的 toggle */
+        var panel = document.getElementById('fx-panel');
+        if (panel) { setPeek(panel, !panel.classList.contains('peek'), 'fx'); return; }
+        if (typeof window.toggleFxPanel === 'function') { window.toggleFxPanel(); return; }
+        if (typeof window.openFxPanel === 'function') { window.openFxPanel(); return; }
+        if (typeof window.toggleDiyMode === 'function') window.toggleDiyMode();
+      } catch (e) { }
+    }, true);
+  }
+
   function bindStageDrag() {
     if (window.__mrStageDragBound) return;
     window.__mrStageDragBound = 1;
@@ -222,32 +242,21 @@
 
   /* v64：舞台（3D 画布 + 拖拽覆盖层）上的单击一律吞掉，不再触发宿主的相机重置/其它响应；
      双击（或 320ms 内两次点击）才回正视角。底栏、4UI、DIY 的点击不受影响。 */
+  /* v65：不再拦截舞台上的单击（那会连带把拖拽旋转/宿主点击一起吃掉）。
+     只保留「双击回正视角」这一个增强；旋转交给 #mr-stage-overlay 的拖拽逻辑。 */
   function bindStageGuard() {
     if (window.__mrStageGuardBound) return;
     window.__mrStageGuardBound = 1;
-    function isStageTarget(target) {
-      if (!target || !target.closest) return false;
-      return !!target.closest('#canvas-container, canvas, #idle-guide-canvas, #mr-stage-overlay');
-    }
     function recenterCamera() {
       try {
         if (typeof window.recenterCamera === 'function') { window.recenterCamera(); return; }
         if (window.orbit) window.orbit.recentering = true;
       } catch (e) { }
     }
-    var lastTapAt = 0;
-    ['click', 'dblclick'].forEach(function (type) {
-      document.addEventListener(type, function (ev) {
-        if (!document.body.classList.contains('mr-player-page')) return;
-        if (ev.touches && ev.touches.length > 1) return;
-        if (!isStageTarget(ev.target)) return;
-        var now = (window.performance && performance.now) ? performance.now() : Date.now();
-        if (type === 'dblclick') { lastTapAt = 0; recenterCamera(); }
-        else if (now - lastTapAt < 320) { lastTapAt = 0; recenterCamera(); }
-        else { lastTapAt = now; }
-        try { ev.stopPropagation(); ev.preventDefault(); } catch (e) { }
-      }, true);
-    });
+    document.addEventListener('dblclick', function (ev) {
+      if (!document.body.classList.contains('mr-player-page')) return;
+      recenterCamera();
+    }, true);
   }
 
   function bindTrackEnter() {
@@ -1066,11 +1075,13 @@
     P('pointer-events', 'none');
     P('display', 'grid');
     var r = ctl.getBoundingClientRect();
+    var barEl = document.getElementById('bottom-bar');
+    var barTop = barEl ? barEl.getBoundingClientRect().top : window.innerHeight;
     var w = pop.offsetWidth || 226;
     var h = pop.offsetHeight || 150;
     var left = Math.round(r.left + r.width / 2 - w / 2);
     left = Math.max(8, Math.min(Math.max(8, window.innerWidth - w - 8), left));
-    var bottom = Math.max(8, Math.round(window.innerHeight - r.top + 8));
+    var bottom = Math.max(8, Math.round(window.innerHeight - Math.min(r.top, barTop) + 8));
     P('left', left + 'px');
     P('bottom', bottom + 'px');
     P('transform', 'none');
@@ -1096,19 +1107,32 @@
   function bindVolumeTap() {
     if (window.__mrVolumeTap) return;
     window.__mrVolumeTap = 1;
+    ['pointerdown', 'touchstart', 'mousedown'].forEach(function (t) {
+      document.addEventListener(t, function (ev) {
+        var hit = ev.target && ev.target.closest ? ev.target.closest('#volume-btn') : null;
+        if (hit) ev.stopPropagation();
+      }, true);
+    });
     document.addEventListener('click', function (ev) {
       var btn = ev.target && ev.target.closest ? ev.target.closest('#volume-btn') : null;
       var ctl = document.querySelector('#mr-player-extras #volume-control');
       if (btn && ctl) {
         ev.stopPropagation();
         ev.preventDefault();
-        var openNow = ctl.classList.toggle('mr-open');
-        if (openNow) placePopover(ctl, ctl.querySelector('.volume-popover'));
-        else hidePopover(ctl.querySelector('.volume-popover'));
+        var vp = document.querySelector('.volume-popover');
+        var openNow = !ctl.__mrPopOpen;
+        ctl.__mrPopOpen = openNow;
+        ctl.classList.toggle('mr-open', openNow);
+        if (openNow) placePopover(ctl, vp);
+        else {
+          hidePopover(vp);
+          window.setTimeout(function () { if (!ctl.__mrPopOpen) hidePopover(vp); }, 80);
+        }
         return;
       }
       if (ctl && !(ev.target.closest && ev.target.closest('.volume-popover'))) {
-        if (ctl.classList.contains('mr-open')) hidePopover(ctl.querySelector('.volume-popover'));
+        ctl.__mrPopOpen = false;
+        hidePopover(document.querySelector('.volume-popover'));
         ctl.classList.remove('mr-open');
       }
     }, true);
@@ -1117,22 +1141,35 @@
   function bindLyricTimingTap() {
     if (window.__mrLyricTimingTap) return;
     window.__mrLyricTimingTap = 1;
+    /* 宿主可能在自己的 pointerdown/touchstart 里就把弹层打开，这里先掐断 */
+    ['pointerdown', 'touchstart', 'mousedown'].forEach(function (t) {
+      document.addEventListener(t, function (ev) {
+        var hit = ev.target && ev.target.closest ? ev.target.closest('#lyrics-toggle-btn') : null;
+        if (hit) ev.stopPropagation();
+      }, true);
+    });
     document.addEventListener('click', function (ev) {
       var btn = ev.target && ev.target.closest ? ev.target.closest('#lyrics-toggle-btn') : null;
       var ctl = document.querySelector('#mr-player-extras .lyric-timing-control');
       if (btn && ctl) {
-        var wasOpen = ctl.classList.contains('mr-open');
-        if (wasOpen) {
-          ctl.classList.remove('mr-open');
-          hidePopover(ctl.querySelector('.lyric-timing-popover'));
-        } else {
+        ev.stopPropagation();
+        try { ev.preventDefault(); } catch (e) { }
+        var pop = document.getElementById('lyric-timing-popover');
+        var openNow = !ctl.__mrPopOpen;
+        ctl.__mrPopOpen = openNow;
+        if (openNow) {
           ctl.classList.add('mr-open');
-          placePopover(ctl, ctl.querySelector('.lyric-timing-popover'));
+          placePopover(ctl, pop);
+        } else {
+          ctl.classList.remove('mr-open');
+          hidePopover(pop);
+          window.setTimeout(function () { if (!ctl.__mrPopOpen) hidePopover(pop); }, 80);
         }
         return;
       }
       if (ctl && !(ev.target.closest && ev.target.closest('.lyric-timing-popover'))) {
-        if (ctl.classList.contains('mr-open')) hidePopover(ctl.querySelector('.lyric-timing-popover'));
+        ctl.__mrPopOpen = false;
+        hidePopover(document.getElementById('lyric-timing-popover'));
         ctl.classList.remove('mr-open');
       }
     }, true);
@@ -1425,6 +1462,7 @@
     bindTrackEnter();
     bindHostNavTriggers();
     bindStageGuard();
+    bindDiyTap();
     bindStageDrag();
     bindLyricTimingTap();
     bindVolumeTap();
