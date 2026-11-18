@@ -342,3 +342,24 @@ Setting the value of 'mineradio-home-dashboard-video-meta-v1' exceeded the quota
 - 面板头部本身也 `position:sticky; top:0; z-index:14`，带不透明渐变底。
 
 实测：面板头 73~194、歌单头 195~326 全程钉住，歌曲行从下面滚过（见截图）。
+---
+
+## 16. v87：歌单面板滑动一直闪烁
+
+**现象**：打开歌单面板，上下滑动时整片闪。
+
+**根因**：宿主的虚拟列表 `schedulePlaylistPanelVirtualRender()` 用 rAF 节流，但每次 scroll 都执行
+`renderUserPlaylistsList()` → `$pl.innerHTML = html` **整段重建**。重建会重新创建所有 `.pl-card` 和封面
+`<img>`（重新解码/占位透明），所以滑动时每帧都在「拆掉重建」，看起来一直闪。
+
+**修法**（patch 层）：改成「一次性全量渲染、滚动不再重建」：
+1. 包装 `renderUserPlaylistsList`：渲染期间置 `__mrPlRendering`；
+2. 包装 `playlistPanelOffsetIndex`：渲染期间第一次调用返回 `0`（窗口起点），第二次返回
+   `offsets.length - 2`（窗口终点）→ 可见区间覆盖全部条目，卡片全量渲染；
+3. 包装 `playlistPanelDetailRowsHtml`：忽略传入窗口，`scrollTop:0` + `viewport:1e6` → 详情行也全量渲染；
+4. 包装 `schedulePlaylistPanelVirtualRender`：`__mrPlFullMode` 下直接返回，滚动不再触发重建；
+5. sticky 头（面板头 / 歌单头）改为近不透明纯色 + 去掉 `backdrop-filter`，避免滚动内容从半透明头下透出。
+
+**验证**：打开歌单 → 展开「我喜欢（297 首）」→ 连续滚动 25 帧，`MutationObserver` 记录 **0 次 DOM 变更**；
+详情行全量渲染（96 = 宿主当前已加载曲目数，分页加载后自动再渲一次）；逐帧亮度差最大 19（属于正常内容位移，
+没有整片闪）；回归 23/23 PASS。

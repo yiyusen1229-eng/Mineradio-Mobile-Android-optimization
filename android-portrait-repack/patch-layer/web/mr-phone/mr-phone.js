@@ -141,6 +141,64 @@
     } catch (e) { }
   }
 
+  /* ===== v87：歌单面板滚动闪烁 =====
+     宿主虚拟列表在滚动时每帧重设 #pl-list.innerHTML（卡片、封面 <img> 全部重建）→ 一直闪。
+     这里改成「一次性全量渲染」：渲染时强制窗口覆盖所有卡片与详情行，之后不再随滚动重建。
+     列表规模最多几百首，全量 DOM 静置比每帧重建更稳，也不会再闪。 */
+  function installPlaylistFullRender() {
+    if (window.__mrPlFullInstalled) return true;
+    if (typeof window.renderUserPlaylistsList !== 'function') return false;
+    if (typeof window.playlistPanelOffsetIndex !== 'function') return false;
+    window.__mrPlFullInstalled = 1;
+    window.__mrPlFullMode = 1;
+
+    var rawRender = window.renderUserPlaylistsList;
+    var rawIdx = window.playlistPanelOffsetIndex;
+    var rawRows = window.playlistPanelDetailRowsHtml;
+    var rawSchedule = window.schedulePlaylistPanelVirtualRender;
+
+    /* 渲染期间：让可见区间 = 全部条目（第一次 = 起点 0，第二次 = 末尾） */
+    window.playlistPanelOffsetIndex = function (offsets, value) {
+      if (window.__mrPlRendering) {
+        window.__mrPlIdxCalls = (window.__mrPlIdxCalls || 0) + 1;
+        if (window.__mrPlIdxCalls <= 1) return 0;
+        return Math.max(0, (offsets && offsets.length ? offsets.length - 2 : 0));
+      }
+      return rawIdx.apply(this, arguments);
+    };
+
+    window.renderUserPlaylistsList = function () {
+      window.__mrPlRendering = 1;
+      window.__mrPlIdxCalls = 0;
+      try {
+        return rawRender.apply(this, arguments);
+      } finally {
+        window.__mrPlRendering = 0;
+        window.__mrPlIdxCalls = 0;
+      }
+    };
+
+    /* 详情行也全量渲染（原来按滚动窗口只渲染十几行） */
+    window.playlistPanelDetailRowsHtml = function (options) {
+      if (typeof rawRows !== 'function') return '';
+      try {
+        var opts = Object.assign({}, options || {});
+        opts.scrollTop = 0;
+        opts.viewport = 1000000;
+        return rawRows(opts);
+      } catch (e) {
+        return rawRows.apply(this, arguments);
+      }
+    };
+
+    /* 滚动时不再触发虚拟重建 */
+    window.schedulePlaylistPanelVirtualRender = function () {
+      if (window.__mrPlFullMode) return;
+      return rawSchedule.apply(this, arguments);
+    };
+    return true;
+  }
+
   /* ===== v86：/api GET 响应缓存（内存 + IndexedDB）=====
      宿主每次打开歌单都会重新拉 /api/user/playlists；旧手机层的 localStorage 缓存已在 v78 清掉。
      这里补一个不占 localStorage 配额的缓存：内存命中即时返回，IndexedDB 持久化（TTL 20 分钟）。
@@ -352,6 +410,7 @@
       try { panelKbFit(); } catch (e) { }
       try { updatePlaylistStickyVars(); } catch (e) { }
       try { installApiFetchCache(); } catch (e) { }
+      try { installPlaylistFullRender(); } catch (e) { }
       try {
         /* 在线歌词模态 / DIY 面板打开时，4UI 弹层一律收起（兜底，防宿主换入口打开） */
         var lom = document.getElementById('lyric-online-modal');
@@ -533,6 +592,7 @@
       try { panelKbFit(); } catch (e) { }
       try { updatePlaylistStickyVars(); } catch (e) { }
       try { installApiFetchCache(); } catch (e) { }
+      try { installPlaylistFullRender(); } catch (e) { }
       return;
     }
     if (!window.__mrDiyOpen) return;          /* 已经关着（或正在播收起动画） */
@@ -2121,6 +2181,7 @@
     ensureClasses();
     mrLocalStorageBoot();
     installApiFetchCache();
+    try { installPlaylistFullRender(); } catch (e) { }
     buildChrome();
     initDiyConsole();
     startStructureObserver();

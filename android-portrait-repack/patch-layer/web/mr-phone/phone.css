@@ -2396,7 +2396,9 @@ body.phone-shell #playlist-panel .playlist-panel-sticky{
   position: sticky!important;
   top: 0!important;
   z-index: 14!important;
-  background: linear-gradient(180deg, rgba(8, 13, 16, .97), rgba(8, 13, 16, .90))!important;
+  background: rgba(7, 12, 15, .985)!important;
+  -webkit-backdrop-filter: none!important;
+  backdrop-filter: none!important;
 }
 body.phone-shell #playlist-panel .pl-inline-detail{
   /* 注意：不能改 height —— 宿主用 inline height 预留整段详情的高度，
@@ -2410,5 +2412,7 @@ body.phone-shell #playlist-panel .pl-detail-sticky{
   position: sticky!important;
   top: var(--mr-pl-head-h, 120px)!important;
   z-index: 12!important;
-  background: linear-gradient(180deg, rgba(12, 17, 27, .96), rgba(12, 17, 27, .86))!important;
+  background: rgba(10, 14, 20, .975)!important;
+  -webkit-backdrop-filter: none!important;
+  backdrop-filter: none!important;
 }
