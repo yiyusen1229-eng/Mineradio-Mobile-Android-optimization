@@ -67,27 +67,50 @@
     }
   }
 
-  /* 开屏/路由切换时宿主会整体重写 html/body 的 class。
-     注意：不能用 MutationObserver —— 宿主在开屏动画里会逐帧重写 class，
-     监听后立刻补类会和宿主来回拉锯，把渲染进程 CPU 打满（实测 109%）。
-     改用低频轮询，只在缺失时补一次。 */
+  /* 宿主会重写 body.class；低频轮询只补类（纯 class 操作，零测量、零内联写），
+     转场期间不做任何布局动作。布局类兜底放到单独的 2.5s watchdog，且转场中直接 return。 */
   function startClassWatch() {
     if (window.__mrPhoneClassWatch) return;
     window.__mrPhoneClassWatch = window.setInterval(function () {
-      if (document.body.classList.contains('mr-player-entering') || document.body.classList.contains('mr-return-home')) return;
-      ensureClasses();
-      hideFab();
-      reorderProgressBar();
-      enhancePlaylistPanel();
-      patchPeek();
-      syncChromeAvatar();
-      layoutPhoneBar();
-    styleBottomBar();
-    ensureBarVisible();
-      styleLoginModal();
-      updatePlayerPage();
-      layoutPlayerExtras();
+      try {
+        ensureClasses();
+        ensureShellState();
+        syncChromeAvatar();
+        enhancePlaylistPanel();
+        patchPeek();
+        patchHostHooks();
+      } catch (e) { }
     }, 2000);
+    startLayoutWatch();
+  }
+
+  function startLayoutWatch() {
+    if (window.__mrLayoutWatch) return;
+    window.__mrLayoutWatch = window.setInterval(function () {
+      if (isBusy()) return;         /* 转场窗口内绝不测量/重排 */
+      try {
+        ensureStructure();
+        reorderProgressBar();
+        layoutPhoneBar();
+        styleLoginModal();
+        hideFab();
+        updateProgressTimes();
+      } catch (e) { }
+    }, 2500);
+  }
+
+  /* 底栏可见性/控件态：手机层是唯一控制者（纯 class 操作） */
+  function ensureShellState() {
+    var b = bodyEl();
+    if (!b) return;
+    try { b.classList.add('controls-visible'); } catch (e) { }
+    var bar = barEl();
+    if (bar) {
+      try {
+        bar.classList.add('visible');
+        bar.classList.remove('soft-hidden', 'controls-hidden', 'hidden');
+      } catch (e) { }
+    }
   }
 
 
@@ -102,7 +125,7 @@
     }
     var bar = document.getElementById('bottom-bar');
     var barTop = bar ? bar.getBoundingClientRect().top : window.innerHeight - 100;
-    var key = Math.round(barTop) + '|' + document.body.classList.contains('mr-player-page');
+    var key = Math.round(barTop) + '|' + (pageState === 'player');
     if (f.__mrPosKey === key && f.style.display === 'flex') return;
     f.__mrPosKey = key;
     var S = function (k, v) { try { f.style.setProperty(k, v, 'important'); } catch (e) { } };
@@ -111,17 +134,22 @@
     S('opacity', '1');
     S('position', 'fixed');
     S('right', '12px');
-    var extra = document.body.classList.contains('mr-player-page') ? 86 : 12;
-    S('bottom', (window.innerHeight - barTop + extra) + 'px');
+    /* 底栏几何在 v62 已恒定：贴着底栏上沿 12px 即可，不再按页面状态分支 */
+    S('bottom', (window.innerHeight - barTop + 12) + 'px');
     S('z-index', '8550');
     S('width', '44px');
     S('height', '44px');
   }
 
+  /* 手机上「回首页」必须走我们自己的状态机：
+     宿主的 goHome() 是开关语义（首页已显示时它会 dismissHomePage 把首页关掉），
+     在播放页则应该走 exitPlayerPage() 的 360ms 转场，而不是瞬间跳。 */
   function gotoHome() {
-    if (typeof window.goHome === 'function') { window.goHome(); return; }
-    var btn = document.getElementById('home-btn');
-    if (btn) btn.click();
+    try {
+      if (pageState === 'player' || pageState === 'to-player') { exitPlayerPage(); return; }
+      if (isBusy()) { commitInstant('home'); return; }
+      /* 已经在首页：什么都不做，避免调 goHome() 把首页 dismiss / 弹「已关闭 Home」 */
+    } catch (e) { }
   }
 
   function openAccount() {
@@ -212,6 +240,7 @@
     document.addEventListener('click', function (ev) {
       var bar = document.getElementById('bottom-bar');
       if (!bar || !bar.contains(ev.target)) return;
+      if (pageState !== 'home' || isBusy()) return;
       var home = document.getElementById('empty-home');
       var homeActive = home && parseFloat(getComputedStyle(home).opacity) > 0.35;
       if (!homeActive) return;
@@ -220,6 +249,51 @@
       ev.preventDefault();
       ev.stopPropagation();
       enterPlayerPage();
+    }, true);
+  }
+
+  /* ---- 宿主驱动的「离开首页」→ 自动进播放页 ----
+     v61 里宿主一收起首页（empty-home-active 消失），心跳里的 updatePlayerPage()
+     就会把 mr-player-page 打上，所以「空白处点一下」「从歌单/搜索点歌起播」都会
+     自动进播放页。v62 改成状态机后这条自动入口丢了，实测会出现两种卡死：
+       · 首页空白处点一下 → dismissHomePage 收起首页，却停在「舞台 + 底栏」，进不去；
+       · 歌单/搜索结果点歌 → 宿主在起播流程里收起首页，但播放页不出现。
+     这里只认两个无歧义的事实，不碰宿主其它 show=false（搜索/导入/面板）： */
+  function enterPlayerFromHostHide() {
+    try {
+      if (pageState !== 'home' || isBusy()) return;
+      if (!bodyEl() || bodyEl().classList.contains('splash-active')) return;
+      if (bodyEl().classList.contains('empty-home-active')) return;   /* 首页还在，不是「离开首页」 */
+      enterPlayerPage();
+    } catch (e) { }
+  }
+
+  function bindHostNavTriggers() {
+    if (window.__mrNavTriggers) return;
+    window.__mrNavTriggers = 1;
+    /* 1) 空白处点击：宿主 dismissHomePage() 收起首页 */
+    if (typeof window.dismissHomePage === 'function') {
+      var rawDismiss = window.dismissHomePage;
+      window.dismissHomePage = function () {
+        var r = rawDismiss.apply(this, arguments);
+        try { window.setTimeout(function () { enterPlayerFromHostHide(); }, 0); } catch (e) { }
+        return r;
+      };
+    }
+    /* 2) 真的起播：宿主起播流程（13-playback-start-audio.js）已先收起首页 */
+    document.addEventListener('playing', function (e) {
+      if (!e.target || e.target.tagName !== 'AUDIO') return;
+      enterPlayerFromHostHide();
+    }, true);
+    /* 进度行时间：宿主 timeupdate 自己的标签被 CSS 隐藏，这里跟着音频刷新，
+       避免只靠 2.5s watchdog 造成「每 2.5 秒跳一次」 */
+    document.addEventListener('timeupdate', function (e) {
+      if (!e.target || e.target.tagName !== 'AUDIO') return;
+      updateProgressTimes();
+    }, true);
+    document.addEventListener('durationchange', function (e) {
+      if (!e.target || e.target.tagName !== 'AUDIO') return;
+      updateProgressTimes();
     }, true);
   }
 
@@ -320,11 +394,24 @@
   }
 
   /* ---- 播放条：进度条挪到「歌曲行」和「控制行」之间 ---- */
+  /* v62：进度条被 #mr-progress-row 包裹（行内左侧时间/进度/右侧时间）。
+     一旦包裹行存在，这里只负责把「整行」放到 transport 前面，
+     绝不能再把 #progress-bar 从行里搬出去（否则底栏高度会在 129.5/141.5 之间来回跳）。 */
   function reorderProgressBar() {
     var controls = document.getElementById('controls');
     var prog = document.getElementById('progress-bar');
     if (!controls || !prog) return;
     var transport = controls.querySelector('.control-cluster.transport');
+    var row = document.getElementById('mr-progress-row');
+    if (row) {
+      if (row.parentElement !== controls) {
+        if (transport) controls.insertBefore(row, transport);
+        else controls.appendChild(row);
+      } else if (transport && row.nextElementSibling !== transport) {
+        controls.insertBefore(row, transport);
+      }
+      return;
+    }
     if (!transport) return;
     if (prog.parentElement === controls && prog.nextElementSibling === transport) return;
     controls.insertBefore(prog, transport);
@@ -349,56 +436,443 @@
     };
   }
 
-  /* 播放页判定：没有 empty-home-active 且不在开屏 */
-  function enterPlayerPage() {
-    window.__mrForcePlayer = true;
-    try { document.body.classList.remove('mr-return-home', 'mr-just-home'); } catch (e) { }
-    try { document.body.classList.add('mr-player-entering'); } catch (e) { }
-    var home = document.getElementById('empty-home');
-    if (home) {
-      home.style.removeProperty('opacity');
-      home.style.removeProperty('pointer-events');
+  /* ==================================================================
+   * v62 转场状态机：首页 ⇄ 播放页
+   * ----------------------------------------------------------------
+   * state: home | to-player | player | to-home
+   *  - 底栏恒高三段（顶部槽位 / 进度行 / 控制行）：进出只换内容，不换结构
+   *  - 歌曲行 .control-cluster.actions 用 WAAPI FLIP 在
+   *    「底栏顶部槽位 ⇄ 屏幕顶部」飞行；飞走后用 #mr-track-slot 占位补高
+   *  - 单一 360ms 转场，只动 transform/opacity
+   *  - 宿主重活（setImmersiveMode / updateEmptyHomeVisibility）放在转场结束后
+   * ================================================================== */
+  var MR_DUR = 360;
+  var MR_EASE = 'cubic-bezier(.22,.9,.25,1)';
+  var pageState = 'home';
+  /* 转场从开始到「宿主收尾（runHostAfterEnter/Exit）结束」整段窗口内，
+     宿主的 updateEmptyHomeVisibility 一律不执行（也不跑 raw），
+     只按当前状态维持 empty-home-active。用来堵两件事：
+       1) 淡入/淡出途中插一次全量 home 重排（掉帧、二次淡入）；
+       2) finishEnter → runHostAfterEnter 的双 rAF 空窗里，宿主算得 show=true
+          把用户顶回首页（回弹）。 */
+  var navSuppressed = false;
+  var navSuppressTimer = 0;
+  function setNavSuppressed(on) {
+    navSuppressed = !!on;
+    if (navSuppressTimer) { try { window.clearTimeout(navSuppressTimer); } catch (e) { } navSuppressTimer = 0; }
+    if (on) {
+      /* 兜底：任何异常路径都不允许永久抑制导航 */
+      navSuppressTimer = window.setTimeout(function () { navSuppressed = false; navSuppressTimer = 0; }, 1600);
     }
-    window.setTimeout(function () {
-      try { document.body.classList.remove('mr-player-entering'); } catch (e) { }
-      try { if (typeof setImmersiveMode === 'function') setImmersiveMode(true); } catch (e) { }
-      updatePlayerPage();
-      try { if (typeof hideFab === 'function') hideFab(); } catch (e) { }
-    }, 260);
+  }
+  var trackDocked = false;
+  var flightAnim = null;
+  var pageTimer = 0;
+  var transSeq = 0;
+  var hostHookDepth = 0;
+  var rawUpdateEmptyHomeVisibility = null;
+
+  function bodyEl() { return document.body; }
+  function barEl() { return document.getElementById('bottom-bar'); }
+  function controlsEl() { return document.getElementById('controls'); }
+  function isBusy() { return pageState === 'to-player' || pageState === 'to-home'; }
+  function hostImmersiveOn() {
+    try { return typeof immersiveMode !== 'undefined' && !!immersiveMode; } catch (e) { return false; }
+  }
+  function findActions() {
+    return document.querySelector('body > .control-cluster.actions.mr-top-track') ||
+      document.querySelector('#bottom-bar #controls > .control-cluster.actions');
+  }
+  function findSlot() { return document.getElementById('mr-track-slot'); }
+
+  function clearPageTimer() {
+    if (pageTimer) { try { window.clearTimeout(pageTimer); } catch (e) { } pageTimer = 0; }
+  }
+  function cancelFlight() {
+    if (flightAnim) { try { flightAnim.cancel(); } catch (e) { } flightAnim = null; }
+  }
+  function clearHomeInline() {
+    var home = document.getElementById('empty-home');
+    if (!home) return;
+    try { home.style.removeProperty('opacity'); home.style.removeProperty('pointer-events'); } catch (e) { }
+  }
+  function scheduleIdle(fn) {
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(function () {
+        window.requestAnimationFrame(function () { window.setTimeout(function () { try { fn(); } catch (e) { } }, 0); });
+      });
+    } else {
+      window.setTimeout(function () { try { fn(); } catch (e) { } }, 50);
+    }
+  }
+
+  /* ---- 底栏恒高三段结构（幂等，只用 class/属性，不做测量） ---- */
+  function ensureStructure() {
+    var bar = barEl();
+    if (!bar) return;
+    var extras = document.getElementById('mr-player-extras');
+    if (!extras) {
+      extras = document.createElement('div');
+      extras.id = 'mr-player-extras';
+    }
+    if (extras.parentElement !== bar) { try { bar.appendChild(extras); } catch (e) { } }
+    var modes = extras.querySelector('.control-cluster.modes') ||
+      document.querySelector('#controls > .control-cluster.modes');
+    if (modes && modes.parentElement !== extras) { try { extras.appendChild(modes); } catch (e) { } }
+    var controls = controlsEl();
+    if (controls) {
+      var slot = findSlot();
+      if (!slot) {
+        slot = document.createElement('div');
+        slot.id = 'mr-track-slot';
+      }
+      if (slot.parentElement !== controls) { try { controls.insertBefore(slot, controls.firstChild); } catch (e) { } }
+      var prog = document.getElementById('progress-bar');
+      var row = document.getElementById('mr-progress-row');
+      if (!row && prog && prog.parentElement) {
+        row = document.createElement('div');
+        row.id = 'mr-progress-row';
+        var c = document.createElement('span'); c.id = 'mr-time-cur'; c.textContent = '0:00';
+        var d = document.createElement('span'); d.id = 'mr-time-dur'; d.textContent = '0:00';
+        row.appendChild(c);
+        try { prog.parentElement.insertBefore(row, prog); } catch (e) { }
+        row.appendChild(prog);
+        row.appendChild(d);
+      } else if (row && prog && prog.parentElement !== row) {
+        var dur = row.querySelector('#mr-time-dur');
+        try { row.insertBefore(prog, dur); } catch (e) { row.appendChild(prog); }
+      }
+    }
+    updateProgressTimes();
+  }
+
+  function applyRowHeight(px) {
+    var h = (Math.round((px || 44) * 100) / 100) + 'px';
+    try { document.documentElement.style.setProperty('--mr-track-row-h', h); } catch (e) { }
+    var slot = findSlot();
+    if (slot) { try { slot.style.height = h; } catch (e) { } }
+  }
+
+  function updateProgressTimes() {
+    var a = window.audio;
+    var cEl = document.getElementById('mr-time-cur');
+    var dEl = document.getElementById('mr-time-dur');
+    if (!a || !cEl || !dEl) return;
+    var fmt = function (x) { if (!isFinite(x) || x < 0) x = 0; var m = Math.floor(x / 60), s = Math.floor(x % 60); return m + ':' + (s < 10 ? '0' : '') + s; };
+    try { cEl.textContent = fmt(a.currentTime); dEl.textContent = fmt(a.duration); } catch (e) { }
+  }
+
+  /* ---- 歌曲行：底栏顶部槽位 → 屏幕顶部（FLIP） ---- */
+  function liftTrackRow() {
+    var actions = findActions();
+    if (!actions) return null;
+    var r0 = actions.getBoundingClientRect();
+    applyRowHeight(r0.height);
+    bodyEl().classList.add('mr-track-away');
+    try { bodyEl().appendChild(actions); } catch (e) { return null; }
+    actions.classList.remove('mr-track-bg-on');
+    actions.classList.add('mr-top-track', 'mr-track-flying');
+    var r1 = actions.getBoundingClientRect();
+    trackDocked = true;
+    actions.classList.add('mr-track-bg-on');   /* 上面已强制过样式计算，这里才触发渐变淡入 */
+    var dx = Math.round((r0.left - r1.left) * 100) / 100;
+    var dy = Math.round((r0.top - r1.top) * 100) / 100;
+    try {
+      return actions.animate(
+        [{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'translate(0px,0px)' }],
+        { duration: MR_DUR, easing: MR_EASE, fill: 'both' }
+      );
+    } catch (e) { return null; }
+  }
+
+  /* ---- 歌曲行：屏幕顶部 → 底栏顶部槽位（反向 FLIP，落位时才换 DOM） ---- */
+  function dropTrackRow() {
+    var actions = findActions();
+    var slot = findSlot();
+    if (!actions) { bodyEl().classList.remove('mr-track-away'); trackDocked = false; return null; }
+    actions.classList.remove('mr-track-bg-on');
+    if (!slot || !trackDocked) return null;
+    var r1 = actions.getBoundingClientRect();
+    var rs = slot.getBoundingClientRect();
+    var dx = Math.round((rs.left - r1.left) * 100) / 100;
+    var dy = Math.round((rs.top - r1.top) * 100) / 100;
+    try {
+      return actions.animate(
+        [{ transform: 'translate(0px,0px)' }, { transform: 'translate(' + dx + 'px,' + dy + 'px)' }],
+        { duration: MR_DUR, easing: MR_EASE, fill: 'both' }
+      );
+    } catch (e) { return null; }
+  }
+
+  function dockTrackImmediate() {
+    var actions = findActions();
+    var controls = controlsEl();
+    cancelFlight();
+    if (actions) {
+      actions.classList.remove('mr-top-track', 'mr-track-flying', 'mr-track-bg-on');
+      try { actions.style.removeProperty('transform'); } catch (e) { }
+      if (controls && actions.parentElement !== controls) {
+        var slot = findSlot();
+        try {
+          if (slot) controls.insertBefore(actions, slot);
+          else controls.insertBefore(actions, controls.firstChild);
+        } catch (e) { }
+      }
+    }
+    bodyEl().classList.remove('mr-track-away');
+    trackDocked = false;
+  }
+
+  function liftTrackImmediate() {
+    var actions = findActions();
+    if (!actions || trackDocked) return;
+    cancelFlight();
+    var h = 44;
+    try { h = actions.getBoundingClientRect().height || 44; } catch (e) { }
+    applyRowHeight(h);
+    bodyEl().classList.add('mr-track-away');
+    try { bodyEl().appendChild(actions); } catch (e) { }
+    actions.classList.add('mr-top-track', 'mr-track-bg-on');
+    actions.classList.remove('mr-track-flying');
+    try { actions.style.removeProperty('transform'); } catch (e) { }
+    trackDocked = true;
+  }
+
+  /* ---- 转场入口 ---- */
+  function enterPlayerPage() {
+    if (pageState === 'player') return;
+    if (isBusy()) commitInstant(pageState === 'to-player' ? 'player' : 'home');
+    if (pageState === 'player') return;
+    var seq = ++transSeq;
+    clearPageTimer();
+    pageState = 'to-player';
+    setNavSuppressed(true);
+    /* 关键：清掉宿主的「首页被强制显示」标记。
+       否则 homeForcedOpen=true 会让 shouldShowEmptyHomeCore() 永远返回 true，
+       播放页期间宿主任何一次 updateEmptyHomeVisibility()（暂停/切歌/队列变化…）
+       都会让包装层判定「首页该显示」→ 立刻把我们踢回首页。 */
+    try { window.homeForcedOpen = false; } catch (e) { }
+    clearHomeInline();
+    ensureStructure();
+    bodyEl().classList.add('mr-transitioning', 'mr-player-page', 'mr-player-entering');
+    flightAnim = liftTrackRow();
+    if (flightAnim && flightAnim.finished && flightAnim.finished.then) {
+      flightAnim.finished.then(function () { finishEnter(seq); }).catch(function () { });
+    }
+    pageTimer = window.setTimeout(function () { finishEnter(seq); }, MR_DUR + 240);
+  }
+
+  function finishEnter(seq) {
+    if (seq !== transSeq) return;
+    clearPageTimer();
+    cancelFlight();
+    var actions = findActions();
+    if (actions) {
+      actions.classList.remove('mr-track-flying');
+      try { actions.style.removeProperty('transform'); } catch (e) { }
+    }
+    pageState = 'player';
+    bodyEl().classList.remove('mr-transitioning', 'mr-player-entering');
+    bodyEl().classList.add('mr-player-page');
+    scheduleIdle(function () { if (pageState === 'player') runHostAfterEnter(); });
   }
 
   function exitPlayerPage() {
-    try { document.body.classList.add('mr-return-home'); } catch (e) { }
-    var home = document.getElementById('empty-home');
-    if (home) {
-      home.style.removeProperty('opacity');
-      home.style.removeProperty('pointer-events');
+    if (pageState === 'home') return;
+    if (isBusy()) commitInstant(pageState === 'to-player' ? 'player' : 'home');
+    if (pageState === 'home') return;
+    var seq = ++transSeq;
+    clearPageTimer();
+    pageState = 'to-home';
+    setNavSuppressed(true);
+    clearHomeInline();
+    /* 用「显示首页」而不是开关：goHome() 有 dismiss 分支（会先把首页关掉再被 hack 拉回） */
+    try { window.homeForcedOpen = true; window.homeSuppressed = false; } catch (e) { }
+    if (!bodyEl().classList.contains('empty-home-active')) {
+      bodyEl().classList.add('empty-home-active');
+      try { window.emptyHomeActive = true; } catch (e) { }
     }
-    window.setTimeout(function () {
-      window.__mrForcePlayer = false;
-      try { document.body.classList.remove('mr-return-home'); } catch (e) { }
-      try { if (typeof setImmersiveMode === 'function') setImmersiveMode(false); } catch (e) { }
-      updatePlayerPage();
-      try { if (typeof hideFab === 'function') hideFab(); } catch (e) { }
-      try { document.body.classList.add('mr-just-home'); } catch (e) { }
-      window.setTimeout(function () { try { document.body.classList.remove('mr-just-home'); } catch (e) { } }, 460);
-      try { if (typeof goHome === 'function') goHome(); } catch (e) { }
-      window.setTimeout(function () {
-        var h = document.getElementById('empty-home');
-        if (h && parseFloat(getComputedStyle(h).opacity) < 0.35) {
-          try { document.body.classList.add('empty-home-active'); } catch (e) { }
-          h.style.setProperty('opacity', '1', 'important');
-          h.style.setProperty('pointer-events', 'auto', 'important');
-          window.setTimeout(function () {
-            try {
-              h.style.removeProperty('opacity');
-              h.style.removeProperty('pointer-events');
-            } catch (e) { }
-          }, 1200);
-        }
-        updatePlayerPage();
-      }, 360);
-    }, 320);
+    bodyEl().classList.add('mr-transitioning', 'mr-return-home');
+    /* 立刻让首页开始淡入：移除 mr-player-page，并撤掉宿主的 immersive 遮罩 */
+    bodyEl().classList.remove('mr-player-page', 'immersive-mode');
+    flightAnim = dropTrackRow();
+    if (flightAnim && flightAnim.finished && flightAnim.finished.then) {
+      flightAnim.finished.then(function () { finishExit(seq); }).catch(function () { });
+    }
+    pageTimer = window.setTimeout(function () { finishExit(seq); }, MR_DUR + 240);
+  }
+
+  function finishExit(seq) {
+    if (seq !== transSeq) return;
+    clearPageTimer();
+    dockTrackImmediate();
+    pageState = 'home';
+    bodyEl().classList.remove('mr-transitioning', 'mr-return-home');
+    scheduleIdle(function () { if (pageState === 'home') runHostAfterExit(); });
+  }
+
+  /* 快速连点/返回键中途接管：立刻落到终态 */
+  function commitInstant(target) {
+    transSeq++;
+    clearPageTimer();
+    applyRowHeight(currentRowHeight());
+    if (target === 'player') {
+      cancelFlight();
+      bodyEl().classList.remove('mr-transitioning', 'mr-player-entering', 'mr-return-home');
+      pageState = 'player';
+      try { window.homeForcedOpen = false; } catch (e) { }
+      bodyEl().classList.add('mr-player-page');
+      if (!trackDocked) liftTrackImmediate();
+      scheduleIdle(function () { if (pageState === 'player') runHostAfterEnter(); });
+    } else {
+      bodyEl().classList.remove('mr-transitioning', 'mr-player-entering', 'mr-return-home');
+      pageState = 'home';
+      bodyEl().classList.remove('mr-player-page');
+      cancelFlight();
+      if (trackDocked) dockTrackImmediate();
+      bodyEl().classList.remove('mr-track-away');
+      scheduleIdle(function () { if (pageState === 'home') runHostAfterExit(); });
+    }
+  }
+
+  function currentRowHeight() {
+    var slot = findSlot();
+    if (slot) { var h = slot.getBoundingClientRect().height; if (h > 0) return h; }
+    return 44;
+  }
+
+  /* ---- 转场结束后的宿主重活（绝不在动画窗口里跑） ---- */
+  function runHostAfterEnter() {
+    try {
+      if (typeof setImmersiveMode === 'function') {
+        if (hostImmersiveOn()) bodyEl().classList.add('immersive-mode');
+        else setImmersiveMode(true);
+      }
+    } catch (e) { }
+    pageState = 'player';
+    updatePlayerPage();
+    try { hideFab(); layoutPhoneBar(); ensureStructure(); } catch (e) { }
+    setNavSuppressed(false);
+  }
+
+  function runHostAfterExit() {
+    hostHookDepth++;
+    try {
+      if (typeof setImmersiveMode === 'function' && hostImmersiveOn()) setImmersiveMode(false);
+      else bodyEl().classList.remove('immersive-mode');
+    } catch (e) { }
+    try { if (typeof setHomeControlsLocked === 'function') setHomeControlsLocked(false); } catch (e) { }
+    try {
+      var bar = barEl();
+      if (bar) { bar.classList.remove('soft-hidden'); bar.classList.add('visible'); }
+    } catch (e) { }
+    try {
+      if (rawUpdateEmptyHomeVisibility) rawUpdateEmptyHomeVisibility({ forceLoad: false });
+      else if (typeof updateEmptyHomeVisibility === 'function') updateEmptyHomeVisibility({ forceLoad: false });
+    } catch (e) { }
+    hostHookDepth--;
+    pageState = 'home';
+    updatePlayerPage();
+    try { hideFab(); ensureStructure(); } catch (e) { }
+    setNavSuppressed(false);
+  }
+
+  /* ---- 宿主钩子：底栏显隐旁路 + 首页显隐事件驱动 + 首页渲染去重 ---- */
+  /* 「确实在起播/在播」——只认播放事实，不认「队列非空」。
+     旧版用 hasActivePlaybackControls()（队列里有歌就 true），会导致开着暂停队列时，
+     点首页「导入本地音乐 / 搜索 / 歌单架」这类 show=false 也误翻到播放页。 */
+  function hasPlaybackSignal() {
+    try { if (window.playing === true) return true; } catch (e) { }
+    try {
+      var a = window.audio;
+      if (a && a.src && !a.paused && !a.ended && a.currentTime > 0.05) return true;
+    } catch (e) { }
+    return false;
+  }
+  function anyOverlayOpen() {
+    var list = [
+      ['playlist-panel', 'show'], ['playlist-panel', 'peek'],
+      ['search-area', 'has-results'], ['login-modal', 'show'],
+      ['fx-panel', 'show'], ['fx-panel', 'peek'], ['visual-guide', 'show'],
+      ['upload-panel', 'show'], ['upload-tip', 'show'],
+      ['user-modal', 'show'], ['trial-banner', 'show'],
+      ['track-detail-modal', 'show'], ['source-fallback-notice', 'show']
+    ];
+    for (var i = 0; i < list.length; i++) {
+      var el = document.getElementById(list[i][0]);
+      if (el && el.classList.contains(list[i][1])) return true;
+    }
+    try { if (bodyEl().classList.contains('fx-console-open')) return true; } catch (e) { }
+    /* 3D 歌单架：卡座被 pin 住/打开了内容时，宿主 shouldShowEmptyHomeCore 也会返回 false，
+       但它不是浮层 DOM，必须单独判断，否则有暂停队列时会被误翻到播放页。 */
+    try { if (window.shelfPinnedOpen) return true; } catch (e) { }
+    try {
+      if (window.shelfManager && shelfManager.hasOpenContent && shelfManager.hasOpenContent()) return true;
+    } catch (e) { }
+    return false;
+  }
+
+  function patchHostHooks() {
+    if (!window.__mrControlsPatched) {
+      window.__mrControlsPatched = 1;
+      /* 手机底栏常显：宿主的自动隐藏/显示状态机不再生效（CSS 也有兜底） */
+      window.setControlsHidden = function () { };
+      window.scheduleControlsHide = function () { };
+    }
+    if (!window.__mrEmptyHomePatched && typeof window.updateEmptyHomeVisibility === 'function') {
+      window.__mrEmptyHomePatched = 1;
+      rawUpdateEmptyHomeVisibility = window.updateEmptyHomeVisibility;
+      window.updateEmptyHomeVisibility = function (opts) {
+        /* 转场窗口（含宿主收尾空窗）：完全旁路宿主，不跑 raw、不做全量首页重排。
+           只按当前状态维持 empty-home-active，避免在淡入/淡出中途插重活，
+           也避免宿主算得 show=true 把用户顶回首页。 */
+        try {
+          if (hostHookDepth > 0) return rawUpdateEmptyHomeVisibility.apply(this, arguments);
+          if (!bodyEl() || bodyEl().classList.contains('splash-active')) return rawUpdateEmptyHomeVisibility.apply(this, arguments);
+          if (navSuppressed) {
+            var wantShow = (pageState === 'home' || pageState === 'to-home');
+            if (wantShow) {
+              if (!bodyEl().classList.contains('empty-home-active')) bodyEl().classList.add('empty-home-active');
+              try { window.emptyHomeActive = true; } catch (e) { }
+            }
+            return wantShow;
+          }
+        } catch (e) { }
+        var res = rawUpdateEmptyHomeVisibility.apply(this, arguments);
+        try {
+          if (hostHookDepth > 0) return res;
+          if (!bodyEl() || bodyEl().classList.contains('splash-active')) return res;
+          var show = (typeof res === 'boolean') ? res : bodyEl().classList.contains('empty-home-active');
+          if (show) {
+            if (pageState === 'player') exitPlayerPage();
+            return res;
+          }
+          if (pageState !== 'home') return res;
+          if (window.homeSuppressed) return res;
+          if (!hasPlaybackSignal()) return res;      /* 只认播放事实，避免面板/上传等误触发 */
+          if (anyOverlayOpen()) return res;
+          enterPlayerPage();
+        } catch (e) { }
+        return res;
+      };
+    }
+    if (!window.__mrRenderHomePatched && typeof window.renderHomeDiscover === 'function') {
+      window.__mrRenderHomePatched = 1;
+      var rawRender = window.renderHomeDiscover;
+      var renderQueued = false;
+      /* 只合并「同一任务内的重复调用」（goHome 一次会连调 2 次），
+         不再用 32ms 时间去重——否则会把 loadHomeDiscover 完成后的那次渲染也吞掉，
+         首页可能停在骨架/「正在整理推荐」。 */
+      window.renderHomeDiscover = function () {
+        if (renderQueued) return;
+        renderQueued = true;
+        var self = this, args = arguments;
+        try {
+          Promise.resolve().then(function () { renderQueued = false; });
+        } catch (e) { renderQueued = false; }
+        return rawRender.apply(self, args);
+      };
+    }
   }
 
   /* 右上角按钮：登录后显示账号头像，点击仍打开「首页/登录/DIY/歌单」菜单 */
@@ -664,37 +1138,12 @@
     if (graph) { S(graph, 'padding', '12px 8px 8px'); }
   }
 
-  /* 底栏半透明：内联强制定制（宿主有多层渐变规则） */
-  /* 兜底：首页底栏如果被动画/宿主状态卡成隐藏，强制恢复可见 */
-  function ensureBarVisible() {
-    if (document.body.classList.contains('mr-player-page') || document.body.classList.contains('mr-player-entering')) return;
-    var bar = document.getElementById('bottom-bar');
-    if (!bar) return;
-    try {
-      var anims = bar.getAnimations ? bar.getAnimations() : [];
-      if (anims.length) return;
-      var cs = getComputedStyle(bar);
-      var op = parseFloat(cs.opacity);
-      if (op < 0.85 || cs.transform !== 'none') {
-        bar.style.setProperty('opacity', '1', 'important');
-        bar.style.setProperty('transform', 'none', 'important');
-        bar.style.setProperty('visibility', 'visible', 'important');
-      }
-    } catch (e) { }
-  }
-
-  function styleBottomBar() {
-    var bar = document.getElementById('bottom-bar');
-    if (!bar) return;
-    var alpha = document.body.classList.contains('mr-player-page') ? '0.58' : '0.62';
-    var S = function (k, v) { try { bar.style.setProperty(k, v, 'important'); } catch (e) { } };
-    S('background', 'rgba(8,14,16,' + alpha + ')');
-    S('background-image', 'none');
-    S('backdrop-filter', 'none');
-    S('-webkit-backdrop-filter', 'none');
-    S('border', '1px solid rgba(255,255,255,.10)');
-    S('box-shadow', '0 10px 30px rgba(0,0,0,.26)');
-  }
+  /* v62：删除 ensureBarVisible() / styleBottomBar() 的运行时内联 !important 写入。
+     原因：内联 !important 的优先级高于样式表 !important，一次写入就会把之后所有
+     transform/opacity 动画的目标值钉死（滑入滑出退化成瞬切，且造成二次弹跳）。
+     底栏外观（半透明、无 backdrop-filter、圆角、边框）改由 phone.css 里的静态规则提供；
+     宿主显隐状态机在 patchHostHooks() 里被旁路（setControlsHidden/scheduleControlsHide = no-op），
+     phone.css 里另有高特异性 guard 覆盖 soft-hidden/controls-hidden/home-controls-locked。 */
 
   function layoutPhoneBar() {
     var tr = document.querySelector('#bottom-bar #controls > .control-cluster.transport');
@@ -711,61 +1160,11 @@
     if (collects) collects.style.setProperty('display', 'none', 'important');
   }
 
-  /* 播放页：把「词/音量/控制条/沉浸」搬到播放条上方；进度条两侧加时间 */
+  /* 播放页顶部槽位（词/音效/沉浸/音量）在 v62 里永久放在 #bottom-bar 内的
+     #mr-player-extras 中，绝对覆盖顶部槽位，不再按状态搬 DOM、也不再测量底栏 rect。
+     这里保留函数名兼容旧调用点。 */
   function layoutPlayerExtras() {
-    var bar = document.getElementById('bottom-bar');
-    if (!bar) return;
-    var extras = document.getElementById('mr-player-extras');
-    if (!extras) {
-      extras = document.createElement('div');
-      extras.id = 'mr-player-extras';
-      document.body.appendChild(extras);
-    }
-    var modes = document.querySelector('#bottom-bar #controls > .control-cluster.modes');
-    var isPlayer = document.body.classList.contains('mr-player-page');
-    if (isPlayer) {
-      if (modes && modes.parentElement !== extras) { try { extras.appendChild(modes); } catch (e) { } }
-      var r = bar.getBoundingClientRect();
-      extras.style.bottom = (window.innerHeight - r.top + 8) + 'px';
-    } else if (modes && modes.parentElement === extras) {
-      var controls = document.getElementById('controls');
-      if (controls) { try { controls.appendChild(modes); } catch (e) { } }
-    }
-    var td = document.getElementById('time-display');
-    if (td) td.style.setProperty('display', 'none', 'important');
-    var prog = document.getElementById('progress-bar');
-    var row = document.getElementById('mr-progress-row');
-    if (!row) {
-      row = document.createElement('div');
-      row.id = 'mr-progress-row';
-      row.innerHTML = '<span id="mr-time-cur">0:00</span><span id="mr-time-dur">0:00</span>';
-      var p0 = prog;
-      if (p0 && p0.parentElement) {
-        var cur = row.querySelector('#mr-time-cur');
-        var dur = row.querySelector('#mr-time-dur');
-        p0.parentElement.insertBefore(row, p0);
-        row.insertBefore(cur, row.firstChild);
-        row.appendChild(p0);
-        row.appendChild(dur);
-      }
-    } else if (prog && prog.parentElement !== row) {
-      var cur2 = row.querySelector('#mr-time-cur');
-      var dur2 = row.querySelector('#mr-time-dur');
-      if (prog.parentElement && cur2 && dur2) {
-        prog.parentElement.insertBefore(row, prog);
-        row.insertBefore(cur2, row.firstChild);
-        row.appendChild(prog);
-        row.appendChild(dur2);
-      }
-    }
-    var a = window.audio;
-    var cEl = document.getElementById('mr-time-cur');
-    var dEl = document.getElementById('mr-time-dur');
-    if (a && cEl && dEl) {
-      var fmt = function (x) { if (!isFinite(x) || x < 0) x = 0; var m = Math.floor(x / 60), s = Math.floor(x % 60); return m + ':' + (s < 10 ? '0' : '') + s; };
-      cEl.textContent = fmt(a.currentTime);
-      dEl.textContent = fmt(a.duration);
-    }
+    ensureStructure();
   }
 
   function syncChromeAvatar() {
@@ -785,39 +1184,17 @@
     }
   }
 
+  /* v62：播放页 class 由状态机（pageState）唯一决定，不再从 empty-home-active 反推，
+     也不再按状态搬 .actions 的 DOM（搬运只发生在 lift/drop 的转场函数里）。 */
   function updatePlayerPage() {
-    if (document.body.classList.contains('mr-return-home')) return;
-    var b = document.body;
-    if (!b) return;
-    var isPlayer = !b.classList.contains('empty-home-active') && !b.classList.contains('splash-active');
-    if (window.__mrForcePlayer) isPlayer = true;
-    var homeEl = document.getElementById('empty-home');
-    if (homeEl && isPlayer) {
-      try {
-        homeEl.style.removeProperty('opacity');
-        homeEl.style.removeProperty('pointer-events');
-      } catch (e) { }
-    }
-    b.classList.toggle('mr-player-page', isPlayer);
-    try { if (typeof hideFab === 'function') hideFab(); } catch (e) { }
-    var actions = document.querySelector('#bottom-bar #controls > .control-cluster.actions');
-    if (isPlayer) {
-      if (actions && actions.parentElement !== b) {
-        b.appendChild(actions);
-      }
-      if (actions) actions.classList.add('mr-top-track');
-    } else {
-      var top = document.querySelector('body > .control-cluster.actions.mr-top-track');
-      if (!top) top = actions && actions.classList.contains('mr-top-track') ? actions : null;
-      if (top) {
-        var controls = document.getElementById('controls');
-        if (controls) {
-          var transport = controls.querySelector('.control-cluster.transport');
-          controls.insertBefore(top, transport || null);
-        }
-        top.classList.remove('mr-top-track');
-      }
-    }
+    if (isBusy()) return;
+    ensureStructure();
+    var isPlayer = pageState === 'player';
+    try { document.body.classList.toggle('mr-player-page', isPlayer); } catch (e) { }
+    if (isPlayer) { if (!trackDocked) liftTrackImmediate(); }
+    else if (trackDocked) { dockTrackImmediate(); }
+    ensureShellState();
+    updateProgressTimes();
   }
 
   function openPlaylistPanel() {
@@ -861,8 +1238,13 @@
 
   /* ---- 返回键：先关浮层，不直接退出 App ---- */
   function closeTopOverlay() {
-        // 播放页：返回键回首页（用 App 自己的 goHome）
-    if (document.body.classList.contains('mr-player-page')) {
+    /* 转场进行中：返回键用来「接管/取消」当前转场，而不是落到宿主默认行为 */
+    if (isBusy()) {
+      commitInstant(pageState === 'to-player' ? 'player' : 'home');
+      return true;
+    }
+    // 播放页：返回键回首页
+    if (pageState === 'player' || document.body.classList.contains('mr-player-page')) {
       exitPlayerPage();
       return true;
     }
@@ -881,6 +1263,9 @@
       return true;
     }
     if (document.body.classList.contains('splash-active')) return true;
+    /* 首页（无浮层）按返回：消费掉，不要落到宿主分支。
+       宿主那边是 goHome()，而 goHome 是开关语义（首页已显示时会 dismissHomePage 把首页关掉）。 */
+    if (pageState === 'home') return true;
     return false;
   }
 
@@ -939,6 +1324,8 @@
   ready(function () {
     ensureClasses();
     buildChrome();
+    ensureStructure();
+    patchHostHooks();
     startClassWatch();
     forceViewport();
     registerBackButton();
@@ -947,14 +1334,13 @@
     enhancePlaylistPanel();
     patchPeek();
     syncChromeAvatar();
+    ensureShellState();
     updatePlayerPage();
     layoutPhoneBar();
-    styleBottomBar();
-    ensureBarVisible();
-    layoutPlayerExtras();
     startNoticeWatch();
     styleLoginModal();
     bindTrackEnter();
+    bindHostNavTriggers();
     bindStageGuard();
     bindStageDrag();
     bindLyricTimingTap();
@@ -965,15 +1351,24 @@
     patchHomeToast();
     tuneRendererOnce();
     tuneAudioFade();
-    bindStageDrag();
-    // 等应用主体初始化后再补一次类（有些移植版会重写 body.className）
-    window.setTimeout(ensureClasses, 1200);
+    // 等应用主体初始化后再补一次：宿主会重写 body.className / 重建 #controls 子节点
+    window.setTimeout(function () {
+      ensureClasses();
+      ensureStructure();
+      patchHostHooks();
+      ensureShellState();
+    }, 1200);
+    window.setTimeout(function () {
+      ensureStructure();
+      patchHostHooks();
+      try { hideFab(); } catch (e) { }
+    }, 3000);
   });
 
   window.MrPhoneShell = {
     enterPlayerPage: enterPlayerPage,
     exitPlayerPage: exitPlayerPage,
-    enable: function () { ensureClasses(); buildChrome(); startClassWatch(); forceViewport(); registerBackButton(); registerPinchZoom(); reorderProgressBar(); enhancePlaylistPanel(); patchPeek(); syncChromeAvatar(); updatePlayerPage(); layoutPhoneBar(); layoutPlayerExtras(); },
+    enable: function () { ensureClasses(); ensureStructure(); patchHostHooks(); bindHostNavTriggers(); startClassWatch(); forceViewport(); registerBackButton(); registerPinchZoom(); reorderProgressBar(); enhancePlaylistPanel(); patchPeek(); syncChromeAvatar(); updatePlayerPage(); layoutPhoneBar(); },
     toggleMenu: toggleMenu,
     forceViewport: forceViewport
   };

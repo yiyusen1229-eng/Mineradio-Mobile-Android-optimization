@@ -28,6 +28,8 @@ Mineradio 竖屏重打包的关键迭代记录。详细版见 `docs/V*-NOTES.md`
 | v58 | 歌单每次打开都加载 | 早期包装 `__mrBridgeRequest` 缓存响应（15min）+ fetch 缓存 |
 | v59 | 歌曲条切换时“扩展/收缩”跳变 | 歌曲行改用 `max-height` 过渡；播放页底栏改纯淡入，去掉尺寸动画 |
 | v61 | 播放页左半边点击/双击触发相机；暂停被双触发 | 舞台覆盖层阻止事件冒泡（pointer/touch/click/dblclick）；移除多余的 `bindInstantPause` |
+| v62 | 首页⇄播放页转场不丝滑、返回首页生硬（底栏高度瞬跳 50px、两段反向运动、首页晚 700ms、2s 轮询引发布局抖动） | 底栏恒高三段（顶部槽位/进度行/控制行）+ 歌曲行 WAAPI FLIP + 单一 360ms 事件驱动转场 + 旁路宿主底栏状态机 + 宿主重活移出动画窗口。详见 `docs/V62-NOTES.md` |
+| v63 | v62 真机复测：空白处点击/从歌单起播时自动进播放页的入口丢失（会卡在「舞台+底栏」）；「…→首页」调未定义函数；进度行时间 2.5s 才跳一次 | `dismissHomePage` 包装 + audio `playing` 事件驱动进播放页；补 `gotoHome()`；`timeupdate` 刷新进度时间；`bindTrackEnter` 加状态守卫。真机逐帧：底栏恒高、退出首页 32ms 开始淡入、无 >32ms 帧。详见 `docs/V63-NOTES.md` |
 
 ## 经验 / 坑
 

@@ -2488,3 +2488,187 @@ body.mr-player-entering #bottom-bar{transform:translateY(112%)!important;opacity
 body.mr-return-home #bottom-bar{transform:translateY(112%)!important;opacity:0!important;animation:none!important;}
 body.mr-player-page #bottom-bar{animation:none!important;}
 body.mr-just-home #bottom-bar{animation:none!important;}
+
+/* ============================================================================
+   ===== V62 转场覆盖（手机版「首页 ⇄ 播放页」重写）=====
+   本块放在文件最后，用更高特异性覆盖前半部分的旧转场实现。
+   作废（被本块覆盖，不再生效；保留旧规则只为减少删除带来的回归风险）：
+     - 2438-2451 mrTopIn/mrTopOut/mrRightIn/mrRightOut/mrBarFold keyframes
+     - 2463-2469 mrBarOutDown/mrTrackFold/mrBarUp：底栏「先下滑再滑回」两段式
+     - 2478-2484 歌曲行 max-height 收缩 + mrFadeBar
+     - 2485-2490 底栏 translateY(112%) 两段式滑出/滑回
+     - 2339 body.mr-player-page #bottom-bar{gap:4px;padding-top:8px}（会改高度）
+     - 2364 #mr-player-extras{position:fixed}（改为底栏内 absolute）
+     - 2352-2356 底栏 opacity 兜底（被新的显隐 guard 取代）
+   新契约：
+     - #bottom-bar 恒高三段：顶部槽位(歌曲行 / 播放页按钮组) + 进度行 + 控制行
+     - .control-cluster.actions 用 WAAPI FLIP 在「底栏顶部槽位 ⇄ 屏幕顶部」飞行
+     - 单一 360ms 转场，只动 transform / opacity，无 backdrop-filter
+   ========================================================================== */
+
+:root{
+  --mr-row-h:44px;          /* 底栏每行固定高度（压掉宿主 62/56/60/64px 抖动） */
+  --mr-track-row-h:44px;    /* 歌曲行真实高度（转场开始时量一次写入） */
+  --mr-dur:360ms;
+  --mr-ease:cubic-bezier(.22,.9,.25,1);
+}
+
+/* —— 行高钉死：宿主 .control-cluster 默认 62px、immersive 64px、断点 56/60px —— */
+body.phone-shell #bottom-bar #controls > .control-cluster{
+  height:var(--mr-row-h)!important;min-height:var(--mr-row-h)!important;max-height:var(--mr-row-h)!important;
+  box-sizing:border-box!important;
+}
+/* 宿主 immersive-mode 会 display:none 歌曲行 → 手机上钉死为 flex */
+body.phone-shell #bottom-bar #controls > .control-cluster.actions{
+  display:flex!important;overflow:visible!important;box-sizing:border-box!important;
+  height:var(--mr-row-h)!important;min-height:var(--mr-row-h)!important;max-height:var(--mr-row-h)!important;
+  transition:none!important;opacity:1!important;
+  /* 压掉旧规则（phone.css:2481 body.mr-player-entering … .actions{transform:translateY(14px)}）：
+     否则 FLIP 起点会比底栏槽位低 14px，飞行落点/起点对不齐。 */
+  transform:none!important;
+}
+body.phone-shell #bottom-bar #controls > .control-cluster.transport{display:flex!important;}
+body.phone-shell #bottom-bar #controls{height:auto!important;}
+
+/* —— 顶部槽位占位：歌曲行飞走后补上同样高度，保证底栏恒高 —— */
+body.phone-shell #mr-track-slot{
+  display:none!important;flex:0 0 auto!important;width:100%!important;
+  height:var(--mr-track-row-h)!important;min-height:var(--mr-track-row-h)!important;
+  margin:0!important;padding:0!important;border:0!important;background:none!important;
+}
+body.phone-shell.mr-track-away #mr-track-slot{display:block!important;}
+
+/* —— 进度行高度钉死：宿主 immersive-mode 会把 #progress-bar 改成 4px、controls gap 16px —— */
+body.phone-shell #mr-progress-row{
+  display:flex!important;align-items:center!important;gap:6px!important;width:100%!important;
+  height:20px!important;min-height:20px!important;max-height:20px!important;
+  margin:0!important;padding:0!important;box-sizing:border-box!important;
+}
+body.phone-shell #bottom-bar #mr-progress-row #progress-bar{
+  height:6px!important;min-height:6px!important;max-height:6px!important;margin:0!important;
+}
+
+/* —— 底栏几何：压掉 immersive-mode / home-controls-locked 的桌面几何 —— */
+body.phone-shell #bottom-bar#bottom-bar{
+  left:8px!important;right:8px!important;width:auto!important;max-width:none!important;
+  bottom:calc(8px + env(safe-area-inset-bottom,0px))!important;
+  transform:none!important;filter:none!important;z-index:42!important;
+  padding:8px 12px 10px!important;gap:6px!important;border-radius:18px!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+  background:rgba(8,14,16,.60)!important;background-image:none!important;
+  border:1px solid rgba(255,255,255,.10)!important;
+  box-shadow:0 10px 30px rgba(0,0,0,.26)!important;
+  animation:none!important;transition:none!important;
+}
+/* 底栏内的按钮不再挂 blur（WebView 上太贵） */
+body.phone-shell #bottom-bar *{
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+}
+body.phone-shell #bottom-bar #controls,
+body.phone-shell #bottom-bar #controls > .control-cluster{background:transparent!important;background-image:none!important;}
+
+/* —— 宿主底栏显隐状态机旁路：手机层是唯一展示控制者 —— */
+body.phone-shell:not(.splash-active):not(.fx-console-open) #bottom-bar,
+body.phone-shell:not(.splash-active):not(.fx-console-open) #bottom-bar.visible,
+body.phone-shell:not(.splash-active):not(.fx-console-open) #bottom-bar.soft-hidden,
+body.phone-shell:not(.splash-active):not(.fx-console-open) #bottom-bar.controls-hidden,
+body.phone-shell:not(.splash-active):not(.fx-console-open) #bottom-bar.hidden,
+body.phone-shell:not(.splash-active):not(.fx-console-open) #bottom-bar.visible.soft-hidden,
+body.phone-shell:not(.splash-active):not(.fx-console-open) #bottom-bar.visible.controls-hidden,
+body.phone-shell:not(.splash-active):not(.fx-console-open).home-controls-locked #bottom-bar,
+body.phone-shell:not(.splash-active):not(.fx-console-open).immersive-mode #bottom-bar{
+  opacity:1!important;visibility:visible!important;pointer-events:auto!important;
+}
+/* 白条 handle 在手机上无用（底栏常显），隐藏，避免 controls-visible 切换时闪现 */
+body.phone-shell #bottom-handle{opacity:0!important;visibility:hidden!important;pointer-events:none!important;}
+
+/* 转场期间底栏本身绝不能被旧规则写 opacity/transform（旧 V59/V61 keyframes 的残留目标值） */
+body.phone-shell.mr-player-entering #bottom-bar,
+body.phone-shell.mr-return-home #bottom-bar,
+body.phone-shell.mr-just-home #bottom-bar{
+  opacity:1!important;transform:none!important;visibility:visible!important;
+  animation:none!important;transition:none!important;
+}
+
+/* —— 顶部歌曲条（FLIP 飞行目标）：样式由自身 class 提供，不再依赖 mr-player-page —— */
+.control-cluster.actions.mr-top-track{
+  position:fixed!important;top:calc(8px + env(safe-area-inset-top,0px))!important;
+  left:12px!important;right:64px!important;width:auto!important;
+  z-index:8400!important;pointer-events:none!important;
+  display:flex!important;align-items:center!important;justify-content:flex-start!important;gap:8px!important;
+  padding:0!important;margin:0!important;border:0!important;
+  border-radius:14px!important;background:transparent!important;box-shadow:none!important;
+  height:var(--mr-row-h)!important;min-height:var(--mr-row-h)!important;max-height:var(--mr-row-h)!important;
+  box-sizing:border-box!important;
+  animation:none!important;transition:none!important;
+}
+.control-cluster.actions.mr-top-track::before{
+  content:'';position:absolute;inset:-8px -10px;border-radius:16px;z-index:-1;
+  background:linear-gradient(180deg,rgba(6,12,12,.72),rgba(6,12,12,0));
+  opacity:0;transition:opacity var(--mr-dur) var(--mr-ease);pointer-events:none;
+}
+.control-cluster.actions.mr-top-track.mr-track-bg-on::before{opacity:1!important;}
+.control-cluster.actions.mr-top-track .control-track{
+  display:flex!important;align-items:center!important;width:100%!important;gap:10px!important;
+  background:transparent!important;overflow:hidden!important;
+}
+.control-cluster.actions.mr-top-track #control-cover{
+  width:var(--mr-row-h)!important;height:var(--mr-row-h)!important;border-radius:11px!important;flex:0 0 auto!important;
+}
+.control-cluster.actions.mr-top-track .control-meta{max-width:none!important;min-width:0!important;}
+.control-cluster.actions.mr-top-track > .ctrl-btn{display:none!important;}
+/* 飞行期间：不带底色/阴影，避免把底栏染色 */
+.control-cluster.actions.mr-track-flying{background:transparent!important;box-shadow:none!important;}
+
+/* —— 播放页顶部槽位按钮组：永久在底栏内，绝对覆盖顶部槽位 —— */
+body.phone-shell #mr-player-extras{
+  position:absolute!important;top:8px!important;left:12px!important;right:12px!important;
+  height:var(--mr-row-h)!important;min-height:var(--mr-row-h)!important;max-height:var(--mr-row-h)!important;
+  z-index:3!important;box-sizing:border-box!important;
+  display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:6px!important;
+  opacity:0;visibility:hidden;pointer-events:none!important;transform:translateY(4px);
+  animation:none!important;
+  transition:opacity var(--mr-dur) var(--mr-ease),transform var(--mr-dur) var(--mr-ease),visibility 0s linear var(--mr-dur)!important;
+}
+body.phone-shell.mr-player-page #mr-player-extras{
+  opacity:1!important;visibility:visible!important;pointer-events:auto!important;transform:none!important;
+  transition:opacity var(--mr-dur) var(--mr-ease),transform var(--mr-dur) var(--mr-ease),visibility 0s linear 0s!important;
+}
+body.phone-shell #mr-player-extras > .control-cluster.modes{
+  display:flex!important;align-items:center!important;height:calc(var(--mr-row-h) - 4px)!important;
+  margin-left:auto!important;background:transparent!important;
+}
+
+/* —— 首页淡出/淡入：退出时 ho 必须立刻上升（不再迟到 700ms） —— */
+body.phone-shell #empty-home{
+  transition:opacity var(--mr-dur) var(--mr-ease),transform var(--mr-dur) var(--mr-ease)!important;
+  will-change:opacity;
+}
+body.phone-shell.mr-player-page #empty-home#empty-home{
+  opacity:0!important;transform:translateX(-50%) translateY(14px)!important;pointer-events:none!important;
+}
+/* 首页内容固定留在底栏上方：不再随 controls-visible 上下跳 94px */
+body.phone-shell #empty-home,
+body.phone-shell.empty-home-active #empty-home,
+body.phone-shell.empty-home-active.controls-visible #empty-home{
+  bottom:calc(118px + env(safe-area-inset-bottom,0px))!important;
+}
+
+/* —— 搜索条 / 右上角 —— */
+body.phone-shell #search-area{
+  transition:opacity .30s var(--mr-ease),transform .30s var(--mr-ease)!important;
+}
+body.phone-shell.mr-player-page #search-area{
+  display:block!important;opacity:0!important;transform:translateY(-64px)!important;pointer-events:none!important;
+}
+body.phone-shell.mr-player-page .phone-chrome-slot{
+  opacity:1!important;transform:none!important;pointer-events:auto!important;
+}
+
+/* —— 性能：只在转场窗口内提升合成层 —— */
+body.phone-shell.mr-transitioning #empty-home,
+body.phone-shell.mr-transitioning #mr-player-extras,
+body.phone-shell.mr-transitioning .control-cluster.actions.mr-top-track{
+  will-change:transform,opacity!important;
+}
+body.phone-shell.mr-transitioning #empty-home{pointer-events:none!important;}
