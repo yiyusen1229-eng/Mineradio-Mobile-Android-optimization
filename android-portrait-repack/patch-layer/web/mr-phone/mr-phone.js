@@ -170,10 +170,21 @@
   /* v70：DIY 键 = 视觉控制台开关（不再有「DIY 玩家模式」这个概念）。
      - 面板从 DIY 键位置长出（CSS transform-origin: 右下）
      - 点面板外/按返回键都只关面板，不改任何模式 */
+  function keepDiyPanelOpen() {
+    if (!window.__mrDiyOpen) return;
+    var panel = document.getElementById('fx-panel');
+    if (!panel) return;
+    if (!panel.classList.contains('peek') && !panel.classList.contains('show')) panel.classList.add('peek');
+    try { panel.style.setProperty('display', 'block', 'important'); } catch (e) { }
+  }
+
   function setDiyPanel(open) {
     var panel = document.getElementById('fx-panel');
     if (!panel) return;
+    window.__mrDiyOpen = !!open;
+    if (window.__mrDiyKeepTimer) { try { clearInterval(window.__mrDiyKeepTimer); } catch (e) { } window.__mrDiyKeepTimer = 0; }
     if (open) {
+      window.__mrDiyKeepTimer = window.setInterval(keepDiyPanelOpen, 250);
       panel.classList.add('peek');
       try { panel.style.setProperty('display', 'block', 'important'); } catch (e) { }
       var fab = document.getElementById('fx-fab');
