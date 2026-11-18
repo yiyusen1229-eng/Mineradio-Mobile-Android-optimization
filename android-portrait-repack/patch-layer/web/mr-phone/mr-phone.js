@@ -362,7 +362,7 @@
       overlay.id = 'mr-stage-overlay';
       document.body.appendChild(overlay);
     }
-    var lastX = 0, lastY = 0, downX = 0, downY = 0, active = false, moved = false;
+    var lastX = 0, lastY = 0, downX = 0, downY = 0, active = false, moved = false, unlocked = false;
     var lastTapAt = 0, lastTapX = 0, lastTapY = 0;
     overlay.addEventListener('touchstart', function (ev) {
       /* v77：取消默认动作 → WebView 不再合成 mousedown/mousemove/mouseup/click。
@@ -374,6 +374,7 @@
         lastX = downX = ev.touches[0].clientX;
         lastY = downY = ev.touches[0].clientY;
         moved = false;
+        unlocked = false;
       } else {
         active = false;
       }
@@ -383,6 +384,17 @@
       var x = ev.touches[0].clientX, y = ev.touches[0].clientY;
       var tx = x - downX, ty = y - downY;
       if (tx * tx + ty * ty > 100) moved = true;   /* >10px 视为拖拽，不当轻点 */
+      if (moved && !unlocked) {
+        /* 宿主 recenterCamera() 会把 orbit.centerLocked 置 true：此后相机目标永远是 baselineTheta，
+           userTheta 改了也不生效（表现为「双击回正后视角锁死」）。宿主的 mousemove 拖拽里会调
+           unlockCenteredView()，我们走 touch 链路绕过了它，所以这里补上。 */
+        unlocked = true;
+        try {
+          if (typeof window.unlockCenteredView === 'function') window.unlockCenteredView();
+          else if (window.orbit) window.orbit.centerLocked = false;
+          if (window.orbit) window.orbit.recentering = false;
+        } catch (e) { }
+      }
       if (!active || !window.orbit) return;
       var dx = x - lastX, dy = y - lastY;
       lastX = x; lastY = y;
@@ -1601,7 +1613,13 @@
       r = Math.max(minR, Math.min(maxR, r));
       o.userRadius = r;
       o.radius = r;
-      if (o.recentering) o.recentering = false;
+      if (o.centerLocked || o.recentering) {
+        try {
+          if (typeof window.unlockCenteredView === 'function') window.unlockCenteredView();
+          else o.centerLocked = false;
+        } catch (e) { }
+        o.recentering = false;
+      }
       e.preventDefault();
     }, { capture: true, passive: false });
     window.addEventListener('touchend', function (e) {

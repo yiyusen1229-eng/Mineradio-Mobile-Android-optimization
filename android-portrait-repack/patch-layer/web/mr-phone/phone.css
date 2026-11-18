@@ -2188,6 +2188,17 @@ body.phone-shell.diy-mode #fx-panel.fx-console{
   transform-origin:100% 100%!important;
   display:block!important;
   animation:none!important;
+  /* v78c：常驻合成层（动画属性是 transform，所以挂 will-change:transform）。
+     不挂的话「关→开」瞬间新建 layer 会让下方 fixed 的搜索框/头像被重新栅格化。 */
+  will-change:transform;
+}
+/* v78c：顶部搜索框 / 头像框各自常驻合成层。
+   面板 layer 在开关瞬间会改变 layer 树，这两个 fixed 玻璃元素若不在独立层上会被重新栅格化，
+   真机 screencast 实测掉 1 帧亮度（用户看到的就是「点 DIY 时搜索框和头像闪一下」）。 */
+body.phone-shell #search-area,
+body.phone-shell .phone-chrome-slot{
+  will-change:transform;
+}
 }
 /* v78：关态不再 display:none —— display 切换会让浏览器跳过过渡，面板「硬切」出现，
    WebView 上肉眼就是闪一下（含一帧低分辨率栅格导致的糊）。保持 block，用透明度+轻微位移过渡；
@@ -2197,15 +2208,17 @@ body.phone-shell:not(.mr-diy-open) #fx-panel{
   opacity:0!important;
   visibility:hidden;
   pointer-events:none!important;
-  /* v78b：关态盒子与开态同高同位（只在 transform/opacity 上做过渡），
-     避免打开瞬间 top/bottom 跳变导致的一帧重排 */
+  /* v78b：关态盒子与开态同高同位（只在 transform 上做过渡），
+     避免打开瞬间 top/bottom 跳变导致的一帧重排。
+     v78c：opacity 不做过渡（瞬时 0/1）——整层透明度动画会让面板半透明地「鬼影」压在首页上，
+     并连带下方 fixed 的搜索框/头像掉 2 帧亮度；只做 10~12px 滑入。 */
   top:31vh!important;
   bottom:calc(8px + var(--mr-bar-h, 138px) + 14px + env(safe-area-inset-bottom, 0px))!important;
   height:auto!important;
   max-height:none!important;
-  transform:translateY(10px)!important;
+  transform:translateY(12px)!important;
   animation:none!important;
-  transition:opacity .16s ease, transform .18s cubic-bezier(.22,.9,.25,1), visibility 0s linear .18s!important;
+  transition:transform .18s cubic-bezier(.22,.9,.25,1), visibility 0s linear .18s!important;
 }
 body.phone-shell.mr-diy-open #fx-panel,
 body.phone-shell.mr-diy-open #fx-panel.peek,
@@ -2224,7 +2237,7 @@ body.phone-shell.mr-diy-open.diy-mode #fx-panel.fx-console{
   overflow:auto!important;
   z-index:8600!important;
   animation:none!important;
-  transition:opacity .18s ease, transform .20s cubic-bezier(.22,.9,.25,1), visibility 0s linear 0s!important;
+  transition:transform .20s cubic-bezier(.22,.9,.25,1), visibility 0s linear 0s!important;
 }
 /* 关态兜底：宿主 class 抖动时也不许面板接管点击 */
 body.phone-shell:not(.mr-diy-open) #fx-panel:not(.show):not(.pinned){

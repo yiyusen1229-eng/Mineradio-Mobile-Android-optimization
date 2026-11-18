@@ -101,3 +101,27 @@
 - 若发现手部追踪相关功能异常（本次静态证据为 0 引用）：把 `assets/hand_landmarker.task` 从 skip-list 移除后重建。
 - 下一步（未做，收益/风险见 assets-audit §4.5）：`assets/materials` 场景→材质引用映射（最多可省十几 MB，工程量较大）；
   `folia-visualizer` 预设图 WebP 化（~2 MB）；`NotoSansCJK` 子集化（风险高，可能缺字）。
+
+---
+
+## 7. v78c 补丁（用户真机复测反馈的两个问题）
+
+### 7.1 首页点 DIY 时顶部「搜索框 + 头像」闪 1~2 帧
+
+**定位方法**：CDP `Page.startScreencast` 逐帧抓图（~40fps），对帧内 CSS 区域算亮度：
+- 修复前：面板打开瞬间有 1~2 帧 `搜索框 44.7→41.4`、`头像 69.2→44.2`（掉 ~35% 亮度），且面板本身呈现**半透明鬼影**（文字浮在首页内容上）。
+- 原因：面板开场用的是**整层 opacity 动画**。过渡中面板本身半透明 → 变成鬼影；同时 panel 加入 layer 树改变了整页合成层结构，下方 `position:fixed` 的玻璃元素（搜索框/头像层）被重新栅格化，出现 1~2 帧掉亮度。
+- 修法：
+  1. 面板开场改为**只滑入、不改 opacity**（opacity 0/1 瞬时切换，transform `translateY(12px)→none` 0.18~0.20s）；
+  2. 面板 `will-change:transform` 常驻合成层（不是临时新建）；
+  3. `#search-area`、`.phone-chrome-slot` 也挂 `will-change:transform`，各自常驻合成层，不再被 panel 的 layer 变化牵连。
+- 复测：打开全程 `搜索框 44.7`、`头像 69.1` 逐帧恒定，0 抖动；面板首帧即满不透明，无鬼影。
+
+### 7.2 播放页双击回正后视角锁死、无法再调整
+
+**原因**：宿主 `recenterCamera()`（双击回正/镜头回正按钮）会置 `orbit.centerLocked = true`。updateCamera 的分支是：
+`if (orbit.centerLocked) targetTheta = orbit.baselineTheta ...`，即相机目标固定为基准位，**`userTheta/userPhi/userRadius` 全部被忽略**。
+宿主自己的拖拽逻辑在 mousemove 里会先调 `unlockCenteredView()`（只做 `centerLocked=false`），而手机层走的是 touch 链路（`#mr-stage-overlay`），绕过了那段 mousemove → 拖动只改了 userTheta，画面却锁在正面。
+
+**修法**：`bindStageDrag` 的 touchmove 里，首次判定为拖拽（位移 >10px）时补调 `window.unlockCenteredView()` 并清 `orbit.recentering`；`registerPinchZoom` 的缩放同样解锁（否则半径也不生效）。
+**真机验证**：swipe 旋转 → θ -0.714 → 双击回正 → θ -0.003 / toast 视角回正 / `centerLocked=true` → 再 swipe → θ **-0.716**、`centerLocked=false`（画面跟随拖动）。
