@@ -1520,6 +1520,92 @@
     return true;
   }
 
+
+  /* ===== v98：音乐库入口 / 每日推荐·最近播放弹层动画 ===== */
+
+  /* 音乐库：宿主走 openPlaylistPanelTab → setPeek(pl)，会被 patchPeek 的闸门挡住 → 临时放开 */
+  function mrWithPlaylistPeekOpen(fn) {
+    try {
+      window.__mrAllowPlOpen = 1;
+      fn();
+    } catch (e) { }
+    window.clearTimeout(window.__mrAllowPlOpenTimer);
+    window.__mrAllowPlOpenTimer = window.setTimeout(function () {
+      window.__mrAllowPlOpen = 0;
+      window.__mrAllowPlOpenTimer = 0;
+    }, 800);
+  }
+  function patchHomeLibraryEntry() {
+    if (window.__mrHomeLibraryPatched) return true;
+    window.__mrHomeLibraryPatched = 1;
+    if (typeof window.openHomeDashboardLibrary === 'function') {
+      var rawLib = window.openHomeDashboardLibrary;
+      window.openHomeDashboardLibrary = function () {
+        var self = this, args = arguments;
+        window.__mrAllowPlOpen = 1;
+        var r;
+        try { r = rawLib.apply(self, args); } catch (e) { }
+        window.clearTimeout(window.__mrAllowPlOpenTimer);
+        window.__mrAllowPlOpenTimer = window.setTimeout(function () {
+          window.__mrAllowPlOpen = 0;
+          window.__mrAllowPlOpenTimer = 0;
+        }, 800);
+        return r;
+      };
+    }
+    if (typeof window.openHomeLibrary === 'function') {
+      var rawLib2 = window.openHomeLibrary;
+      window.openHomeLibrary = function () {
+        return mrWithPlaylistPeekOpen(function () { rawLib2.apply(this, arguments); });
+      };
+    }
+    return true;
+  }
+
+  /* 每日推荐 / 最近播放：套上「先加 closing class 再真正关闭」的滑出动画 */
+  var MR_DISCOVERY_PANEL_IDS = ['daily-recommend-panel', 'listen-history-panel'];
+  function mrClosePanelAnimated(id, rawClose) {
+    var mask = document.getElementById(id);
+    if (mask && mask.classList.contains('show') && !mask.classList.contains('mr-panel-closing')) {
+      mask.classList.add('mr-panel-closing');
+      window.setTimeout(function () {
+        try {
+          mask.classList.remove('mr-panel-closing');
+          if (typeof rawClose === 'function') rawClose();
+          else mask.classList.remove('show');
+        } catch (e) { }
+      }, 220);
+      return;
+    }
+    if (typeof rawClose === 'function') rawClose();
+  }
+  function patchDiscoveryPanelsAnimation() {
+    if (window.__mrDiscoveryAnimPatched) return true;
+    window.__mrDiscoveryAnimPatched = 1;
+    ['closeDailyRecommendPanel', 'closeListenHistoryPanel'].forEach(function (name) {
+      var raw = window[name];
+      if (typeof raw !== 'function') return;
+      var id = name.indexOf('Daily') >= 0 ? 'daily-recommend-panel' : 'listen-history-panel';
+      window[name] = function () { return mrClosePanelAnimated(id, raw); };
+    });
+    /* 点遮罩关闭也走动画（捕获阶段先接管，避免宿主内部 closePanel 立刻撤 class） */
+    document.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.id) return;
+      if (MR_DISCOVERY_PANEL_IDS.indexOf(t.id) < 0) return;
+      if (!t.classList.contains('show')) return;
+      if (t.classList.contains('mr-panel-closing')) return;
+      ev.stopImmediatePropagation();
+      ev.stopPropagation();
+      ev.preventDefault();
+      var rawName = t.id === 'daily-recommend-panel' ? 'closeDailyRecommendPanel' : 'closeListenHistoryPanel';
+      var raw = window[rawName];
+      if (typeof raw === 'function') mrClosePanelAnimated(t.id, raw);
+      else t.classList.remove('show');
+    }, true);
+    return true;
+  }
+
   function startWatchdog() {
     if (window.__mrWatchdog) return;
     window.__mrWatchdog = 1;
@@ -1532,6 +1618,8 @@
       if (WATCH_TICK % 4 === 0) {
         try { if (document.getElementById('hotkey-settings-btn') || document.getElementById('hotkey-modal')) mrRemoveHotkeyUi(); } catch (e) { }
         try { patchHomeQuickCards(); } catch (e) { }
+        try { patchHomeLibraryEntry(); } catch (e) { }
+        try { patchDiscoveryPanelsAnimation(); } catch (e) { }
         try { patchImportMenuButton(); } catch (e) { }
         try { patchSearchPauseForVoice(); } catch (e) { }
         try { patchPlatformPanelAnimation(); } catch (e) { }
@@ -3388,6 +3476,8 @@
     try { patchProgressiveSearch(); } catch (e) { }
     try { patchLikeStatusSync(); } catch (e) { }
     try { patchHotkeyRemoval(); } catch (e) { }
+    try { patchHomeLibraryEntry(); } catch (e) { }
+    try { patchDiscoveryPanelsAnimation(); } catch (e) { }
     try { patchUiHideControls(); } catch (e) { }
     try { patchHomeQuickCards(); } catch (e) { }
     try { patchImportMenuButton(); } catch (e) { }

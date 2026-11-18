@@ -641,3 +641,22 @@ v88 的搜索超时会返回哨兵 `{ok:false,error:'MR_SEARCH_TIMEOUT',songs:[]
 缓存里可能存过 v88 的「超时空包」（`MR_SEARCH_TIMEOUT` 空结果）导致同一关键词永远空。
 v94 起已修：缓存 DB 换 `mr-api-cache-v2`、哨兵不存不读、空结果带 cache-buster 重试。
 建议让朋友升级到 v97 再试；如果仍空，多半是该网络/IP 被酷狗限流。
+---
+
+## 27. v98：音乐库入口修复 + 三处弹层动画统一
+
+### 27.1 点「音乐库」没反应
+宿主链路：`openHomeDashboardLibrary()` → `openHomeLibrary()` → `openPlaylistPanelTab('playlists', true)` → `setPeek(panel, true, 'pl')`。
+手机层 `patchPeek` 里有一个 `__mrAllowPlOpen` 闸门（原本用于修「关 DIY 面板时歌单面板被顺带 setPeek 出来」），
+把这条链路也挡了。修法：包装 `openHomeDashboardLibrary` / `openHomeLibrary`，调用期间临时置 `__mrAllowPlOpen = 1`，
+800ms 后自动复位。验证：点音乐库 → 歌单面板 `peek` 打开、`#pl-list .pl-card` 12 张。
+
+### 27.2 每日推荐 / 最近播放 弹层动画
+宿主运行时创建 `#daily-recommend-panel` / `#listen-history-panel`，结构是 `.modal-mask` + `.modal.discovery-panel-modal`。
+手机 CSS 早先用 `animation: none !important` 统一抹掉所有 modal 动画，所以这两个是硬切。现补：
+- 打开：遮罩 `mrMaskIn` 0.24s，面板 `mrSheetIn` 0.34s `cubic-bezier(.22,.9,.25,1)`（`translateY(16px) scale(.985)` → 原位，和 DIY 面板同一套手感）；
+- 关闭：包装 `closeDailyRecommendPanel` / `closeListenHistoryPanel`，先加 `.mr-panel-closing` 播放 0.22s 反向动画再真正关闭；
+- 点遮罩关闭也在捕获阶段接管，保证有滑出动画。
+
+### 27.3 音乐发现 / 平台推荐
+从 v96 的 0.2s / 0.3s 统一到 0.34s open + 0.22s close，与 DIY 面板一致，手感更连贯。

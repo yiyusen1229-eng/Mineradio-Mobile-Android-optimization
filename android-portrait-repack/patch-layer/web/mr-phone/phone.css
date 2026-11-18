@@ -2672,3 +2672,52 @@ body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-quick .home-c
   -webkit-line-clamp: 2!important;
   -webkit-box-orient: vertical!important;
 }
+
+/* ===== v98：统一面板动画（对齐 DIY 面板手感：0.34s cubic-bezier(.22,.9,.25,1)）===== */
+@keyframes mrSheetIn{
+  from{ transform: translate3d(0, 16px, 0) scale(.985); opacity: .38 }
+  to{ transform: translate3d(0, 0, 0) scale(1); opacity: 1 }
+}
+@keyframes mrSheetOut{
+  from{ transform: translate3d(0, 0, 0) scale(1); opacity: 1 }
+  to{ transform: translate3d(0, 14px, 0) scale(.99); opacity: 0 }
+}
+@keyframes mrMaskIn{ from{ opacity: 0 } to{ opacity: 1 } }
+@keyframes mrMaskOut{ from{ opacity: 1 } to{ opacity: 0 } }
+
+/* 每日推荐 / 最近播放 */
+body.phone-shell #daily-recommend-panel.show,
+body.phone-shell #listen-history-panel.show{
+  animation: mrMaskIn .24s ease-out both!important;
+}
+body.phone-shell #daily-recommend-panel.show .discovery-panel-modal,
+body.phone-shell #listen-history-panel.show .discovery-panel-modal{
+  animation: mrSheetIn .34s cubic-bezier(.22,.9,.25,1) both!important;
+  will-change: transform, opacity!important;
+  transform-origin: 50% 100%!important;
+}
+body.phone-shell #daily-recommend-panel.show.mr-panel-closing,
+body.phone-shell #listen-history-panel.show.mr-panel-closing{
+  animation: mrMaskOut .22s ease-in both!important;
+  pointer-events: none!important;
+}
+body.phone-shell #daily-recommend-panel.show.mr-panel-closing .discovery-panel-modal,
+body.phone-shell #listen-history-panel.show.mr-panel-closing .discovery-panel-modal{
+  animation: mrSheetOut .22s cubic-bezier(.4,0,.6,1) both!important;
+}
+
+/* 音乐发现 / 平台推荐：统一到同一手感 */
+body.phone-shell #home-platform-recommend-mask.show{
+  animation: mrMaskIn .24s ease-out both!important;
+}
+body.phone-shell #home-platform-recommend-mask.show .home-platform-recommend-modal{
+  animation: mrSheetIn .34s cubic-bezier(.22,.9,.25,1) both!important;
+  will-change: transform, opacity!important;
+  transform-origin: 50% 100%!important;
+}
+body.phone-shell #home-platform-recommend-mask.show.mr-panel-closing{
+  animation: mrMaskOut .22s ease-in both!important;
+}
+body.phone-shell #home-platform-recommend-mask.show.mr-panel-closing .home-platform-recommend-modal{
+  animation: mrSheetOut .22s cubic-bezier(.4,0,.6,1) both!important;
+}
