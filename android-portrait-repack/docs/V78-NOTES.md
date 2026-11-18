@@ -470,3 +470,28 @@ scroll（rAF 节流）里重新执行 `$ql.innerHTML = ...` → 所有 `.queue-i
 ### 20.4 想再减体积的两条路（需取舍）
 - 字体子集化：`NotoSansCJK-Regular.ttc` 18.6MB → 只保留常用汉字/假名 ≈ 3~4MB，**省 ~14MB**，但生僻字可能变豆腐；
 - 材质预设裁剪：`assets/materials` 34MB 按可视化场景裁剪，**省 20MB+**，但会废掉部分粒子/场景预设。
+---
+
+## 21. v92：磨砂玻璃 + 首页板块支持静态图
+
+### 21.1 磨砂玻璃
+- 搜索历史：`#search-results.search-history-surface` 与其内层 `.search-history` 一起加
+  `backdrop-filter: blur(24px) saturate(150%)` + `rgba(9,12,16,.82)` 深底 + 细边框/内高光；
+- DIY 面板顶框：`#fx-panel .fx-head` 与 `.fx-head-main` 加 `blur(22px) saturate(155%)` + `rgba(10,14,18,.84)`；
+- 注意：宿主会给外层元素设透明背景（computed 仍可能是 `rgba(0,0,0,0)`），所以外层和内层都要写，实际可读性靠内层深底 + blur。
+
+### 21.2 首页板块静态图
+宿主「选择 MP4」只接受 `.mp4`（`homeDashboardIsMp4File`），blob 存在 IndexedDB
+`mineradio-home-dashboard-video-v1` / store `media` / id `home-hero-video`，meta 在
+`localStorage` 的 `mineradio-home-dashboard-video-meta-v1`。
+
+手机层做法：
+- 包装 `handleHomeDashboardVideoFile`：图片（jpg/png/webp/gif）走 `mrHomeImgChoose`，视频走原逻辑；
+- 图片先 canvas 压缩（最长边 2048，JPEG q0.88），blob 存进**同一个 DB** 的 `home-hero-image` id；
+  meta 存 `mr-home-hero-image-v1`（version/name/type/size/width/height/savedAt）；
+- 包装 `renderHomeDashboardHero`：把 input 的 `accept` 扩成 `.mp4,video/mp4,image/jpeg,image/png,image/webp,image/gif`，
+  并在 `.daily-review-card` 里插入 `<img class="mr-home-hero-image">`（与宿主 video 同为 absolute inset:0 / z-index:0）；
+- 二选一：选图时清掉宿主视频（meta + blob + 元素），选视频时清掉图片；
+- 包装 `homeDashboardRenderVideoActions`：有图时按钮变「更换背景图 / 移除背景图」；包装 `clearHomeDashboardVideo`：有图时清图片。
+
+实测：模拟选图 → img 出现、meta 落地、按钮改名、视频元素移除；重启后图片仍在；清除后 img/meta 均空；回归 23/23 PASS。

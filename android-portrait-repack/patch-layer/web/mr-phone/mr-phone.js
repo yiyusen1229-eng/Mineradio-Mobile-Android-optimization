@@ -535,6 +535,254 @@
     } catch (e) { }
   }
 
+
+  /* ===== v92：首页板块支持静态图片（与 MP4 二选一，存 IndexedDB 持久化） =====
+     宿主自带「选择 MP4」：只接受 .mp4，把 blob 存进 DB mineradio-home-dashboard-video-v1/media。
+     这里复用同一个 DB 存一张图（id 用 home-hero-image），并在 .home-hero 里插 <img>。 */
+  var MR_HOME_IMG_DB = 'mineradio-home-dashboard-video-v1';
+  var MR_HOME_IMG_STORE = 'media';
+  var MR_HOME_IMG_BLOB_ID = 'home-hero-image';
+  var MR_HOME_IMG_META_KEY = 'mr-home-hero-image-v1';
+  var MR_HOME_IMG_MAX_BYTES = 24 * 1024 * 1024;
+  var MR_HOME_IMG_MAX_SIDE = 2048;
+  var mrHomeImgDbPromise = null;
+  var mrHomeImgObjectUrl = '';
+
+  function mrHomeImgOpenDb() {
+    if (mrHomeImgDbPromise) return mrHomeImgDbPromise;
+    mrHomeImgDbPromise = new Promise(function (resolve) {
+      var req;
+      try { req = indexedDB.open(MR_HOME_IMG_DB, 1); } catch (e) { resolve(null); return; }
+      req.onupgradeneeded = function () {
+        try {
+          if (!req.result.objectStoreNames.contains(MR_HOME_IMG_STORE)) req.result.createObjectStore(MR_HOME_IMG_STORE, { keyPath: 'id' });
+        } catch (e) { }
+      };
+      req.onsuccess = function () { resolve(req.result || null); };
+      req.onerror = function () { mrHomeImgDbPromise = null; resolve(null); };
+      req.onblocked = function () { mrHomeImgDbPromise = null; resolve(null); };
+    });
+    return mrHomeImgDbPromise;
+  }
+
+  function mrHomeImgMeta() {
+    try {
+      var m = JSON.parse(localStorage.getItem(MR_HOME_IMG_META_KEY) || 'null');
+      if (!m || m.version !== 1 || !m.name) return null;
+      return m;
+    } catch (e) { return null; }
+  }
+
+  function mrHomeImgWriteMeta(meta) {
+    try {
+      if (meta) localStorage.setItem(MR_HOME_IMG_META_KEY, JSON.stringify(meta));
+      else localStorage.removeItem(MR_HOME_IMG_META_KEY);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  async function mrHomeImgPutBlob(blob, meta) {
+    var db = await mrHomeImgOpenDb();
+    if (!db) throw new Error('HOME_IMAGE_DB_UNAVAILABLE');
+    await new Promise(function (resolve, reject) {
+      var tx = db.transaction(MR_HOME_IMG_STORE, 'readwrite');
+      tx.objectStore(MR_HOME_IMG_STORE).put({ id: MR_HOME_IMG_BLOB_ID, blob: blob, meta: meta });
+      tx.oncomplete = function () { resolve(); };
+      tx.onerror = tx.onabort = function () { reject(tx.error || new Error('HOME_IMAGE_SAVE_FAILED')); };
+    });
+  }
+
+  async function mrHomeImgGetBlob() {
+    var db = await mrHomeImgOpenDb();
+    if (!db) return null;
+    return await new Promise(function (resolve) {
+      try {
+        var rq = db.transaction(MR_HOME_IMG_STORE, 'readonly').objectStore(MR_HOME_IMG_STORE).get(MR_HOME_IMG_BLOB_ID);
+        rq.onsuccess = function () { resolve(rq.result || null); };
+        rq.onerror = function () { resolve(null); };
+      } catch (e) { resolve(null); }
+    });
+  }
+
+  async function mrHomeImgDeleteBlob() {
+    var db = await mrHomeImgOpenDb();
+    if (!db) return;
+    await new Promise(function (resolve) {
+      try {
+        var tx = db.transaction(MR_HOME_IMG_STORE, 'readwrite');
+        tx.objectStore(MR_HOME_IMG_STORE).delete(MR_HOME_IMG_BLOB_ID);
+        tx.oncomplete = tx.onerror = tx.onabort = function () { resolve(); };
+      } catch (e) { resolve(); }
+    });
+  }
+
+  function mrHomeImgNotify(msg) {
+    try { if (typeof window.homeDashboardNotify === 'function') { window.homeDashboardNotify(msg); return; } } catch (e) { }
+    try { console.log('[HomeImage]', msg); } catch (e) { }
+  }
+
+  function mrHomeImgDetach() {
+    try {
+      var img = document.querySelector('#empty-home .mr-home-hero-image');
+      if (img) img.remove();
+    } catch (e) { }
+    if (mrHomeImgObjectUrl) {
+      try { URL.revokeObjectURL(mrHomeImgObjectUrl); } catch (e) { }
+      mrHomeImgObjectUrl = '';
+    }
+  }
+
+  async function mrHomeImgAttach() {
+    var hero = document.querySelector('#empty-home .home-hero');
+    if (!hero) return;
+    var meta = mrHomeImgMeta();
+    if (!meta) { mrHomeImgDetach(); return; }
+    var existing = hero.querySelector('.mr-home-hero-image');
+    if (existing && existing.getAttribute('src')) return;
+    var rec = await mrHomeImgGetBlob();
+    if (!rec || !rec.blob) return;
+    if (mrHomeImgObjectUrl) { try { URL.revokeObjectURL(mrHomeImgObjectUrl); } catch (e) { } }
+    mrHomeImgObjectUrl = URL.createObjectURL(rec.blob);
+    var card = hero.querySelector('.daily-review-card') || hero;
+    var img = document.createElement('img');
+    img.className = 'mr-home-hero-image';
+    img.setAttribute('aria-hidden', 'true');
+    img.alt = '';
+    img.src = mrHomeImgObjectUrl;
+    if (existing) existing.remove();
+    card.insertBefore(img, card.firstChild);
+  }
+
+  /* 图片压缩：限制最长边 2048，统一转 JPEG（透明图铺黑底） */
+  function mrHomeImgEncode(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var w = img.naturalWidth || 0;
+          var h = img.naturalHeight || 0;
+          if (!w || !h) { URL.revokeObjectURL(url); reject(new Error('BAD_IMAGE')); return; }
+          var scale = Math.min(1, MR_HOME_IMG_MAX_SIDE / Math.max(w, h));
+          var cw = Math.max(1, Math.round(w * scale));
+          var ch = Math.max(1, Math.round(h * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = cw; canvas.height = ch;
+          var ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#050608';
+          ctx.fillRect(0, 0, cw, ch);
+          ctx.drawImage(img, 0, 0, cw, ch);
+          URL.revokeObjectURL(url);
+          canvas.toBlob(function (blob) {
+            if (blob) resolve({ blob: blob, width: cw, height: ch });
+            else reject(new Error('ENCODE_FAILED'));
+          }, 'image/jpeg', 0.88);
+        } catch (e) { URL.revokeObjectURL(url); reject(e); }
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('DECODE_FAILED')); };
+      img.src = url;
+    });
+  }
+
+  async function mrHomeImgChoose(file) {
+    if (!file) return;
+    if (Number(file.size) > MR_HOME_IMG_MAX_BYTES) { mrHomeImgNotify('图片不能超过 24 MB'); return; }
+    try {
+      var encoded = await mrHomeImgEncode(file);
+      var meta = {
+        version: 1,
+        name: String(file.name || 'home-image'),
+        type: 'image/jpeg',
+        size: encoded.blob.size || 0,
+        width: encoded.width,
+        height: encoded.height,
+        savedAt: Date.now()
+      };
+      await mrHomeImgPutBlob(encoded.blob, meta);
+      mrHomeImgWriteMeta(meta);
+      /* 与 MP4 二选一：清掉宿主的视频 */
+      try { if (typeof window.homeDashboardReleaseVideoSource === 'function') window.homeDashboardReleaseVideoSource(true); } catch (e) { }
+      try { localStorage.removeItem('mineradio-home-dashboard-video-meta-v1'); } catch (e) { }
+      try { if (typeof window.homeDashboardDeleteVideoBlob === 'function') window.homeDashboardDeleteVideoBlob().catch(function () { }); } catch (e) { }
+      var v = document.querySelector('#empty-home .home-dashboard-video');
+      if (v) v.remove();
+      mrHomeImgDetach();
+      await mrHomeImgAttach();
+      try { if (typeof window.homeDashboardRenderVideoActions === 'function') window.homeDashboardRenderVideoActions(); } catch (e) { }
+      mrHomeImgNotify('首页背景图已保存');
+    } catch (e) {
+      console.warn('[HomeImageSave]', e);
+      mrHomeImgNotify('首页背景图保存失败');
+    }
+  }
+
+  async function mrHomeImgClear() {
+    mrHomeImgWriteMeta(null);
+    mrHomeImgDetach();
+    try { await mrHomeImgDeleteBlob(); } catch (e) { }
+    try { if (typeof window.homeDashboardRenderVideoActions === 'function') window.homeDashboardRenderVideoActions(); } catch (e) { }
+    mrHomeImgNotify('已恢复首页默认动画');
+  }
+
+  function patchHomeHeroMedia() {
+    if (window.__mrHomeHeroMediaPatched) return true;
+    if (typeof window.handleHomeDashboardVideoFile !== 'function') return false;
+    window.__mrHomeHeroMediaPatched = 1;
+
+    var rawHandle = window.handleHomeDashboardVideoFile;
+    window.handleHomeDashboardVideoFile = function (file) {
+      try {
+        var type = String((file && file.type) || '').toLowerCase();
+        var name = String((file && file.name) || '');
+        if (/^image\//.test(type) || /\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(name)) return mrHomeImgChoose(file);
+      } catch (e) { }
+      /* 选视频时清掉图片，保持二选一 */
+      try { if (mrHomeImgMeta()) { mrHomeImgWriteMeta(null); mrHomeImgDetach(); mrHomeImgDeleteBlob().catch(function () { }); } } catch (e) { }
+      return rawHandle.apply(this, arguments);
+    };
+
+    if (typeof window.homeDashboardRenderVideoActions === 'function') {
+      var rawActions = window.homeDashboardRenderVideoActions;
+      window.homeDashboardRenderVideoActions = function () {
+        var r = rawActions.apply(this, arguments);
+        try {
+          var hasImage = !!mrHomeImgMeta();
+          var choose = document.getElementById('home-dashboard-video-choose');
+          var clear = document.getElementById('home-dashboard-video-clear');
+          if (hasImage) {
+            if (choose) choose.textContent = '更换背景图';
+            if (clear) { clear.hidden = false; clear.textContent = '移除背景图'; }
+          } else {
+            if (clear && !clear.hidden) clear.textContent = '移除视频';
+          }
+        } catch (e) { }
+        return r;
+      };
+    }
+
+    if (typeof window.renderHomeDashboardHero === 'function') {
+      var rawHero = window.renderHomeDashboardHero;
+      window.renderHomeDashboardHero = function () {
+        var r = rawHero.apply(this, arguments);
+        try {
+          var input = document.getElementById('home-dashboard-video-input');
+          if (input) input.setAttribute('accept', '.mp4,video/mp4,image/jpeg,image/png,image/webp,image/gif');
+          mrHomeImgAttach();
+        } catch (e) { }
+        return r;
+      };
+    }
+
+    if (typeof window.clearHomeDashboardVideo === 'function') {
+      var rawClear = window.clearHomeDashboardVideo;
+      window.clearHomeDashboardVideo = function () {
+        if (mrHomeImgMeta()) return mrHomeImgClear();
+        return rawClear.apply(this, arguments);
+      };
+    }
+    return true;
+  }
+
   function startWatchdog() {
     if (window.__mrWatchdog) return;
     window.__mrWatchdog = 1;
@@ -2383,6 +2631,7 @@
     styleLoginModal();
     bindTrackEnter();
     bindSearchPlayEnter();
+    try { patchHomeHeroMedia(); } catch (e) { }
     bindHostNavTriggers();
     bindStageGuard();
     bindDiyTap();
