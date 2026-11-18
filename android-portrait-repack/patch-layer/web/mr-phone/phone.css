@@ -2319,7 +2319,7 @@ body.phone-shell #bottom-bar #controls > .control-cluster.modes{display:none!imp
 body.phone-shell #search-area{left:8px!important;right:64px!important;transform:none!important;width:auto!important;
 max-width:none!important;top:calc(6px + env(safe-area-inset-top,0px))!important;z-index:9000!important;}
 body.phone-shell #search-area.has-results #search-stack{display:flex!important;flex-direction:column!important;
-height:calc(100dvh - 220px)!important;max-height:none!important;background:rgba(8,16,14,.98)!important;
+height:calc(100dvh - 220px)!important;max-height:none!important;background:transparent!important;
 border-radius:18px!important;overflow:hidden!important;}
 body.phone-shell #search-results{flex:1 1 auto!important;min-height:0!important;width:100%!important;
 overflow-y:auto!important;overscroll-behavior:contain!important;}
@@ -2701,4 +2701,158 @@ body.phone-shell #search-stack{
   background:transparent!important;
   border:0!important;
   box-shadow:none!important;
+}
+
+/* ================= V67 ================= */
+
+/* ① DIY 视觉控制台：手机层给面板补 display，否则点了只是加 class 但 display:none */
+body.phone-shell #fx-panel.show,
+body.phone-shell #fx-panel.peek,
+body.phone-shell #fx-panel.pinned{
+  display:block!important;visibility:visible!important;
+}
+
+/* ② 搜索：外层暗底去掉后，结果面板本身给足不透明度 */
+body.phone-shell #search-results{
+  background:rgba(11,16,18,.94)!important;
+  border:1px solid rgba(255,255,255,.08)!important;
+  border-radius:16px!important;
+  box-shadow:0 14px 38px rgba(0,0,0,.38)!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+}
+body.phone-shell #search-results.show{display:block!important;}
+
+/* ③ 自适应：底部栏行高/间距/字号随屏高屏宽收敛（端口态） */
+body.phone-shell{
+  --mr-row-h:clamp(40px, 5.4vh, 52px);
+  --mr-gap:clamp(4px, 1.4vw, 8px);
+  --mr-bar-pad-x:clamp(8px, 2.2vw, 20px);
+  --mr-transport-gap:clamp(8px, 2.6vw, 18px);
+  --mr-ctrl-size:clamp(38px, 10.5vw, 48px);
+}
+body.phone-shell #bottom-bar{
+  padding-left:var(--mr-bar-pad-x)!important;
+  padding-right:var(--mr-bar-pad-x)!important;
+}
+body.phone-shell #bottom-bar #controls > .control-cluster.transport{
+  gap:var(--mr-transport-gap)!important;
+}
+body.phone-shell #bottom-bar #controls .ctrl-btn{
+  width:var(--mr-ctrl-size)!important;
+  height:var(--mr-ctrl-size)!important;
+}
+body.phone-shell #bottom-bar{font-size:clamp(11px, 1.45vh, 13px)!important;}
+body.phone-shell #mr-progress-row{font-size:clamp(10px, 1.3vh, 12px)!important;}
+body.phone-shell #search-input{font-size:clamp(15px, 2.1vh, 18px)!important;}
+body.phone-shell #search-area{left:clamp(8px, 2vw, 16px)!important;right:clamp(52px, 14vw, 72px)!important;}
+body.phone-shell #mr-player-extras{right:clamp(58px, 15vw, 72px)!important;}
+body.phone-shell #fx-fab{right:clamp(6px, 1.6vw, 12px)!important;}
+
+/* 窄屏（≤360）：再收一档，避免 4UI/DIY 挤在一起 */
+@media (max-width:360px){
+  body.phone-shell{
+    --mr-row-h:40px;
+    --mr-ctrl-size:36px;
+    --mr-transport-gap:6px;
+  }
+  body.phone-shell #bottom-bar #controls > .control-cluster.actions{padding-right:48px!important;}
+  body.phone-shell #mr-player-extras{gap:4px!important;}
+}
+
+/* 大屏/平板（≥600）：限制单行元素过分拉伸，字号抬一档 */
+@media (min-width:600px){
+  body.phone-shell{
+    --mr-row-h:52px;
+    --mr-ctrl-size:48px;
+    --mr-transport-gap:20px;
+    --mr-bar-pad-x:24px;
+  }
+  body.phone-shell #bottom-bar{font-size:14px!important;}
+  body.phone-shell #search-area{max-width:min(92vw, 720px)!important;}
+}
+
+/* 横屏/矮屏（≤520 高）：压缩竖向占用，底栏不占 1/3 屏 */
+@media (orientation:landscape) and (max-height:520px){
+  body.phone-shell{
+    --mr-row-h:34px;
+    --mr-ctrl-size:34px;
+    --mr-transport-gap:clamp(6px, 2vw, 16px);
+  }
+  body.phone-shell #mr-progress-row{height:16px!important;font-size:10px!important;}
+  body.phone-shell #bottom-bar{padding-top:4px!important;padding-bottom:4px!important;}
+  body.phone-shell #mr-player-extras{height:34px!important;}
+}
+
+/* ================= V67b：几何变量化 / 安全区 / 短屏硬化 ================= */
+body.phone-shell #bottom-bar{position:fixed!important;}
+body.phone-shell #fx-fab{
+  position:absolute!important;top:8px!important;bottom:auto!important;left:auto!important;
+  right:clamp(6px, 1.6vw, 12px)!important;
+  width:var(--mr-ctrl-size)!important;height:var(--mr-ctrl-size)!important;
+  border-radius:14px!important;margin:0!important;z-index:6!important;
+}
+/* 4UI 与其右侧的 DIY 等间距：right = inset + DIY 宽 + 间距 */
+body.phone-shell #mr-player-extras{
+  right:calc(clamp(6px,1.6vw,12px) + var(--mr-ctrl-size) + var(--mr-gap))!important;
+  padding-left:env(safe-area-inset-left, 0px)!important;
+  padding-right:env(safe-area-inset-right, 0px)!important;
+}
+/* 顶部歌名条/搜索/提示：给左右刘海留安全区 */
+body.phone-shell #mr-top-track{right:calc(clamp(52px,14vw,72px) + env(safe-area-inset-right,0px))!important;}
+body.phone-shell #search-area{right:calc(clamp(52px,14vw,72px) + env(safe-area-inset-right,0px))!important;}
+body.phone-shell #toast{left:calc(16px + env(safe-area-inset-left,0px))!important;right:calc(16px + env(safe-area-inset-right,0px))!important;}
+/* 歌单浮层不再用「底栏 150px」死值：跟着底部栏高度走 */
+body.phone-shell #playlist-panel{bottom:calc(var(--mr-bar-h,150px) + 8px + env(safe-area-inset-bottom,0px))!important;}
+/* 首页内容底部间距跟着底栏走 */
+body.phone-shell #empty-home{bottom:calc(var(--mr-bar-h,150px) - 12px + env(safe-area-inset-bottom,0px))!important;}
+/* 320 极窄屏：7 键挤不下时先把收藏键收进次级位（保留 5 键） */
+@media (max-width:340px){
+  body.phone-shell #bottom-bar #heart-btn{display:none!important;}
+  body.phone-shell #bottom-bar #controls > .control-cluster.transport{gap:4px!important;}
+}
+/* 短屏深色横屏：底栏压缩、extras/DIY 同步缩小 */
+@media (orientation:landscape) and (max-height:520px){
+  body.phone-shell #mr-player-extras{height:34px!important;right:calc(clamp(6px,1.6vw,12px) + var(--mr-ctrl-size) + 4px)!important;}
+  body.phone-shell #fx-fab{top:6px!important;}
+  body.phone-shell #playlist-panel{bottom:calc(var(--mr-bar-h,120px) + 4px)!important;}
+}
+
+/* ================= V68 ================= */
+/* FAB：用双 id 选择器压住宿主 52px 的宽度，保证各断点都是正方形 */
+body.phone-shell #bottom-bar #fx-fab{
+  width:var(--mr-ctrl-size)!important;
+  height:var(--mr-ctrl-size)!important;
+  min-width:0!important;max-width:none!important;
+  border-radius:clamp(10px, 3.2vw, 15px)!important;
+}
+/* 底栏内容不再出现 1~4px 的裁切 */
+body.phone-shell #bottom-bar #controls{overflow:visible!important;}
+/* 搜索结果面板：高特异性 → 更不透明（外层 #search-stack 已是透明） */
+body.phone-shell #search-area.has-results #search-results{
+  background:rgba(11,16,18,.94)!important;
+  border:1px solid rgba(255,255,255,.08)!important;
+  border-radius:16px!important;
+  box-shadow:0 14px 38px rgba(0,0,0,.38)!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+}
+/* 短屏横屏：controls 行间距收紧，避免裁切 */
+@media (orientation:landscape) and (max-height:520px){
+  body.phone-shell #bottom-bar #controls{overflow:visible!important;}
+  body.phone-shell #bottom-bar #controls > .control-cluster.transport{gap:clamp(4px,1.4vw,12px)!important;}
+}
+
+/* ============ V69：4UI 与 DIY 的间距（各断点统一 6px 视觉间距） ============ */
+body.phone-shell #bottom-bar #mr-player-extras{
+  right:calc(clamp(6px, 1.6vw, 12px) + var(--mr-ctrl-size) + 6px)!important;
+}
+@media (max-width:360px){
+  body.phone-shell #bottom-bar #mr-player-extras{
+    right:calc(6px + var(--mr-ctrl-size) + 6px)!important;
+  }
+}
+@media (orientation:landscape) and (max-height:520px){
+  body.phone-shell #bottom-bar #mr-player-extras{
+    right:calc(6px + var(--mr-ctrl-size) + 6px)!important;
+    height:34px!important;
+  }
 }

@@ -117,33 +117,25 @@
 
   /* 宿主会把 DIY 浮动按钮重新显示出来（会压住卡片），这里用内联 important 兜底 */
   /* v64：DIY 不再是浮在舞台上的悬浮球，而是底栏右上角的一个按钮（首页/播放页都在这里） */
+  /* v67：DIY 只负责「显示 + 挂进底栏」，位置/尺寸全部交给 CSS 变量（自适应） */
   function hideFab() {
     var f = document.getElementById('fx-fab');
     if (!f) return;
     if (document.body.classList.contains('splash-active')) {
       try { f.style.setProperty('display', 'none', 'important'); } catch (e) { }
-      f.__mrPosKey = '';
       return;
     }
     var bar = document.getElementById('bottom-bar');
     if (!bar) return;
     if (f.parentElement !== bar) { try { bar.appendChild(f); } catch (e) { } }
-    var key = 'bar|' + Math.round(bar.getBoundingClientRect().width) + '|' + (pageState === 'player');
-    if (f.__mrPosKey === key && f.style.display === 'flex') return;
-    f.__mrPosKey = key;
+    try { document.documentElement.style.setProperty('--mr-bar-h', Math.round(bar.getBoundingClientRect().height) + 'px'); } catch (e) { }
     var S = function (k, v) { try { f.style.setProperty(k, v, 'important'); } catch (e) { } };
     S('display', 'flex');
     S('visibility', 'visible');
     S('opacity', '1');
     S('position', 'absolute');
-    S('right', '8px');
-    S('top', '8px');
-    S('bottom', 'auto');
-    S('left', 'auto');
-    S('margin', '0');
     S('z-index', '6');
-    S('width', '44px');
-    S('height', '44px');
+    S('margin', '0');
   }
 
   /* 手机上「回首页」必须走我们自己的状态机：
@@ -184,19 +176,25 @@
       ev.stopPropagation();
       try { ev.preventDefault(); } catch (e) { }
       try {
-        /* DIY 键 = 视觉控制台开关：宿主 toggleFxPanel 要求 diyPlayerMode 已开启，先补齐再开/关 */
+        /* DIY 键 = 视觉控制台开关。宿主 toggleFxPanel 依赖 diyPlayerMode 且面板 display 在手机层被藏，
+           这里直接落 class + 调 setPeek，保证点一下就能开/关。 */
         var panel = document.getElementById('fx-panel');
-        var isOpen = !!(panel && (panel.classList.contains('show') || panel.classList.contains('peek')));
-        var diyOn = false;
-        try { diyOn = !!window.diyPlayerMode; } catch (e) { }
-        if (!isOpen && !diyOn) {
-          if (typeof window.toggleDiyMode === 'function') { window.toggleDiyMode(); }
-          else bodyEl().classList.add('diy-mode');
-        }
-        if (typeof window.toggleFxPanel === 'function') { window.toggleFxPanel(!isOpen); return; }
-        if (panel) {
-          setPeek(panel, !isOpen, 'fx');
-          return;
+        if (!panel) return;
+        var isOpen = panel.classList.contains('show') || panel.classList.contains('peek') || panel.classList.contains('pinned');
+        if (!isOpen) {
+          var diyOn = false;
+          try { diyOn = !!window.diyPlayerMode; } catch (e) { }
+          if (!diyOn && typeof window.toggleDiyMode === 'function') {
+            try { window.toggleDiyMode(); } catch (e) { }
+          }
+          try { if (typeof window.openFxPanel === 'function') { window.openFxPanel(); } } catch (e) { }
+          panel.classList.add('peek');
+          try { if (typeof setPeek === 'function') setPeek(panel, true, 'fx'); } catch (e) { }
+        } else {
+          panel.classList.remove('show', 'peek', 'pinned');
+          try { if (typeof setPeek === 'function') setPeek(panel, false, 'fx'); } catch (e) { }
+          var fab = document.getElementById('fx-fab');
+          if (fab) fab.classList.remove('active');
         }
       } catch (e) { }
     }, true);
