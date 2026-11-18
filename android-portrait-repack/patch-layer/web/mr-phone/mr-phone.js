@@ -167,36 +167,78 @@
   /* 播放页：拦截舞台画布上的点击/双击，避免 App 触发相机重置、隐藏控件 */
   /* 播放页舞台触摸层：单指拖动旋转视角，双指交给缩放 */
   /* v65：DIY 键点击兜底（宿主绑在自己 DOM 上的 handler 在重排后可能不触发） */
+  /* v70：DIY 键 = 视觉控制台开关（不再有「DIY 玩家模式」这个概念）。
+     - 面板从 DIY 键位置长出（CSS transform-origin: 右下）
+     - 点面板外/按返回键都只关面板，不改任何模式 */
+  function setDiyPanel(open) {
+    var panel = document.getElementById('fx-panel');
+    if (!panel) return;
+    if (open) {
+      panel.classList.add('peek');
+      try { panel.style.setProperty('display', 'block', 'important'); } catch (e) { }
+      try { if (typeof setPeek === 'function') setPeek(panel, true, 'fx'); } catch (e) { }
+      var fab = document.getElementById('fx-fab');
+      if (fab) fab.classList.add('active');
+    } else {
+      panel.classList.remove('show', 'peek', 'pinned');
+      try { panel.style.setProperty('display', 'none', 'important'); } catch (e) { }
+      try { if (typeof setPeek === 'function') setPeek(panel, false, 'fx'); } catch (e) { }
+      var fab2 = document.getElementById('fx-fab');
+      if (fab2) fab2.classList.remove('active');
+    }
+  }
+
+  function diyPanelOpen() {
+    var panel = document.getElementById('fx-panel');
+    return !!(panel && (panel.classList.contains('show') || panel.classList.contains('peek') || panel.classList.contains('pinned')));
+  }
+
+  /* 把宿主「DIY 玩家模式」固定打开（手机版不再暴露这个开关），并换回原包的 DIY 图标 */
+  function initDiyConsole() {
+    if (window.__mrDiyInit) return;
+    window.__mrDiyInit = 1;
+    try { window.diyPlayerMode = true; } catch (e) { }
+    try { bodyEl().classList.add('diy-mode'); } catch (e) { }
+    var fab = document.getElementById('fx-fab');
+    if (fab && !fab.__mrIcon) {
+      fab.__mrIcon = 1;
+      fab.innerHTML = '<svg width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" viewBox="0 0 24 24">'
+        + '<path d="M4 7h8"/><path d="M16 7h4"/><circle cx="14" cy="7" r="2"/>'
+        + '<path d="M4 17h4"/><path d="M12 17h8"/><circle cx="10" cy="17" r="2"/></svg>';
+    }
+  }
+
   function bindDiyTap() {
     if (window.__mrDiyTap) return;
     window.__mrDiyTap = 1;
-    document.addEventListener('click', function (ev) {
-      var fab = ev.target && ev.target.closest ? ev.target.closest('#fx-fab') : null;
-      if (!fab) return;
-      ev.stopPropagation();
-      try { ev.preventDefault(); } catch (e) { }
-      try {
-        /* DIY 键 = 视觉控制台开关。宿主 toggleFxPanel 依赖 diyPlayerMode 且面板 display 在手机层被藏，
-           这里直接落 class + 调 setPeek，保证点一下就能开/关。 */
-        var panel = document.getElementById('fx-panel');
-        if (!panel) return;
-        var isOpen = panel.classList.contains('show') || panel.classList.contains('peek') || panel.classList.contains('pinned');
-        if (!isOpen) {
-          var diyOn = false;
-          try { diyOn = !!window.diyPlayerMode; } catch (e) { }
-          if (!diyOn && typeof window.toggleDiyMode === 'function') {
-            try { window.toggleDiyMode(); } catch (e) { }
-          }
-          try { if (typeof window.openFxPanel === 'function') { window.openFxPanel(); } } catch (e) { }
-          panel.classList.add('peek');
-          try { if (typeof setPeek === 'function') setPeek(panel, true, 'fx'); } catch (e) { }
-        } else {
-          panel.classList.remove('show', 'peek', 'pinned');
-          try { if (typeof setPeek === 'function') setPeek(panel, false, 'fx'); } catch (e) { }
-          var fab = document.getElementById('fx-fab');
-          if (fab) fab.classList.remove('active');
-        }
-      } catch (e) { }
+    var lastAt = 0;
+    function toggleFromFab(ev) {
+      var now = Date.now();
+      if (now - lastAt < 450) return;
+      lastAt = now;
+      if (ev) { try { ev.stopPropagation(); ev.preventDefault(); } catch (e) { } }
+      setDiyPanel(!diyPanelOpen());
+    }
+    /* 宿主在 touchstart/pointerdown 上可能 preventDefault，导致 click 不产生；
+       所以直接在 DIY 元素上挂 pointerup / touchend / click 三保险（带 450ms 去重）。 */
+    function bindFab(el) {
+      if (!el || el.__mrDiyBound) return;
+      el.__mrDiyBound = 1;
+      ['pointerup', 'mouseup', 'touchend', 'click'].forEach(function (t) {
+        el.addEventListener(t, function (ev) {
+          if (ev.type === 'touchend' && ev.touches && ev.touches.length) return;
+          toggleFromFab(ev);
+        }, { passive: false });
+      });
+    }
+    bindFab(document.getElementById('fx-fab'));
+    window.setInterval(function () { bindFab(document.getElementById('fx-fab')); }, 1500);
+    /* 点面板外：只关面板 */
+    document.addEventListener('pointerdown', function (ev) {
+      if (!diyPanelOpen()) return;
+      if (ev.target.closest && ev.target.closest('#fx-panel')) return;
+      if (ev.target.closest && ev.target.closest('#fx-fab')) return;
+      setDiyPanel(false);
     }, true);
   }
 
@@ -361,16 +403,7 @@
       actions.appendChild(homeBtn);
       actions.appendChild(loginBtn);
 
-      // DIY 浮层（手机上浮动按钮被隐藏，改从菜单进）
-      var diyBtn = document.createElement('button');
-      diyBtn.type = 'button';
-      diyBtn.className = 'phone-chrome-action';
-      diyBtn.textContent = 'DIY';
-      diyBtn.addEventListener('click', function () {
-        toggleMenu(false);
-        try { if (typeof window.toggleDiyMode === 'function') window.toggleDiyMode(); } catch (e) { }
-      });
-      actions.appendChild(diyBtn);
+      /* v70：菜单里的「DIY 玩家模式」入口删除——DIY 只由底栏 DIY 键开关面板 */
 
       var plBtn = document.createElement('button');
       plBtn.type = 'button';
@@ -1369,6 +1402,8 @@
       commitInstant(pageState === 'to-player' ? 'player' : 'home');
       return true;
     }
+    /* v70：视觉控制台打开时，返回键只关面板（不动模式/不退出播放页） */
+    if (diyPanelOpen()) { setDiyPanel(false); return true; }
     // 播放页：返回键回首页
     if (pageState === 'player' || document.body.classList.contains('mr-player-page')) {
       exitPlayerPage();
@@ -1450,6 +1485,7 @@
   ready(function () {
     ensureClasses();
     buildChrome();
+    initDiyConsole();
     ensureStructure();
     patchHostHooks();
     startClassWatch();
@@ -1495,7 +1531,7 @@
   window.MrPhoneShell = {
     enterPlayerPage: enterPlayerPage,
     exitPlayerPage: exitPlayerPage,
-    enable: function () { ensureClasses(); ensureStructure(); patchHostHooks(); bindHostNavTriggers(); startClassWatch(); forceViewport(); registerBackButton(); registerPinchZoom(); reorderProgressBar(); enhancePlaylistPanel(); patchPeek(); syncChromeAvatar(); updatePlayerPage(); layoutPhoneBar(); },
+    enable: function () { ensureClasses(); initDiyConsole(); ensureStructure(); patchHostHooks(); bindHostNavTriggers(); startClassWatch(); forceViewport(); registerBackButton(); registerPinchZoom(); reorderProgressBar(); enhancePlaylistPanel(); patchPeek(); syncChromeAvatar(); updatePlayerPage(); layoutPhoneBar(); },
     toggleMenu: toggleMenu,
     forceViewport: forceViewport
   };

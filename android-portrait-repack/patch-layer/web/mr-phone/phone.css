@@ -2856,3 +2856,31 @@ body.phone-shell #bottom-bar #mr-player-extras{
     height:34px!important;
   }
 }
+
+/* ================= V70：视觉控制台从 DIY 键位置弹出 ================= */
+body.phone-shell #fx-panel{
+  left:auto!important;right:8px!important;top:auto!important;
+  bottom:calc(var(--mr-bar-h, 140px) + 8px + env(safe-area-inset-bottom, 0px))!important;
+  width:min(92vw, 520px)!important;max-width:min(92vw, 520px)!important;
+  max-height:min(64dvh, calc(100dvh - 180px))!important;
+  border-radius:18px!important;
+  transform-origin:100% 100%!important;
+  transform:translate(14px, 22px) scale(.92)!important;
+  opacity:0;pointer-events:none!important;
+  transition:transform .30s cubic-bezier(.22,.9,.25,1), opacity .22s ease!important;
+  overflow:auto!important;
+  z-index:60!important;
+  padding-bottom:8px!important;
+}
+body.phone-shell #fx-panel.peek,
+body.phone-shell #fx-panel.show,
+body.phone-shell #fx-panel.pinned{
+  transform:none!important;opacity:1!important;pointer-events:auto!important;
+}
+/* 横屏矮屏：面板不要顶到屏幕顶 */
+@media (orientation:landscape) and (max-height:520px){
+  body.phone-shell #fx-panel{
+    width:min(58vw, 520px)!important;max-width:min(58vw, 520px)!important;
+    max-height:calc(100dvh - 120px)!important;
+  }
+}
