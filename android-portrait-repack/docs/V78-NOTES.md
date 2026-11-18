@@ -205,3 +205,29 @@
 ### 11.3 手机端首页「媒体」按钮（选择/更换 MP4、移除视频）
 桌面每日卡片有 `#home-dashboard-video-choose`（选择/更换 MP4）、`#home-dashboard-video-clear`（移除视频，宿主按是否有视频切 hidden），但 phone.css 早期把它们和 `.daily-review-btn.ghost` 一起 `display:none` 掉了。
 v82 只保留 ghost 的隐藏，恢复两个视频按钮，并按手机排版（32px 高 / 12px 字号 / 换行 / 圆角 12）。实测：首页卡片恢复「换一条 / 选择 MP4 / 展开播放器控制台」（未选视频时「移除视频」按宿主逻辑隐藏），点「选择 MP4」弹出系统文件/视频选择器（com.android.photopicker），可选 MP4；宿主用 IndexedDB 存视频 + 300MB 上限。
+---
+
+## 12. v83：底栏系统条安全区 + 返回首页信息条落位闪烁
+
+### 12.1 底栏 UI 在别的手机显示不全
+实测（本机 WebView 157）：`env(safe-area-inset-bottom)` **恒为 0**，虽然 meta viewport 有 `viewport-fit=cover`。底栏原本 `bottom: calc(8px + env(...))` → 只离屏幕底 8px，换到手势条高的手机就被盖住一截。
+修法：定义 `--mr-sys-bottom: max(env(safe-area-inset-bottom, 0px), 22px)`，底栏 `bottom: calc(8px + var(--mr-sys-bottom))`；并把所有「锚在底栏上方」的定位同步加上它：
+- DIY 面板开/关态、横屏态 bottom
+- `#playlist-panel` 两处、`#empty-home` 内容底边
+- 固定像素锚定的 popover（150px / 118px 两处）
+
+实测：底栏下沿距屏幕底 **30px**（原 8px），DIY 面板底 688.8 / 底栏顶 703（间距 14px，未被压）。
+
+### 12.2 切回首页时歌曲信息条「缩一下/闪一下」
+三个原因叠加：
+1. 回程 FLIP 只做 `translate`，行在顶部宽 316、入栏后由 `#controls` 撑到 350，落位换 DOM 时宽度瞬间跳变；
+2. `dropTrackRow` 一开始去掉了 `mr-track-bg-on` → 飞行途中行没有背景，半透明地掠过首页文字；
+3. 早期尝试为了量目标尺寸提前去掉 `mr-track-away` → 底栏高度 138→89 再弹回。
+
+修法：
+- FLIP 期间用 rAF 同步写 inline `width/height!important`（WAAPI 的 width/height 关键帧会被 CSS `!important` 盖掉），缓动与 `MR_EASE` 同一条 cubic-bezier；第一帧同步写一次防闪帧；落位/取消时清掉内联。
+- 目标矩形取 `#controls` 的真实 rect（=`入栏后行的 rect`），不用占位 slot。
+- 飞行期间保留 `mr-track-bg-on`，`mr-track-away` 等落位后再去掉。
+- 起飞方向（首页→播放页）同样补宽高插值（350→316）。
+
+逐帧验证（CDP screencast + 每帧量 rect）：宽度 316→350 连续无跳、底栏恒 138、飞行帧不透明；回归 23/23 PASS。

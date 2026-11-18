@@ -911,6 +911,61 @@
     try { extras.style.removeProperty('bottom'); extras.style.removeProperty('top'); } catch (e) { }
   }
 
+  /* v83：FLIP 行的宽高同步动画（WAAPI 的 width/height 会被 CSS !important 盖掉，只能自己写内联） */
+  var MR_EASE_FN = (function () {
+    /* cubic-bezier(.22,.9,.25,1) 求值：给定 x 求 y */
+    var x1 = 0.22, y1 = 0.9, x2 = 0.25, y2 = 1;
+    function A(a1, a2) { return 1 - 3 * a2 + 3 * a1; }
+    function B(a1, a2) { return 3 * a2 - 6 * a1; }
+    function C(a1) { return 3 * a1; }
+    function calc(t, a1, a2) { return ((A(a1, a2) * t + B(a1, a2)) * t + C(a1)) * t; }
+    function slope(t, a1, a2) { return 3 * A(a1, a2) * t * t + 2 * B(a1, a2) * t + C(a1); }
+    return function (x) {
+      if (x <= 0) return 0;
+      if (x >= 1) return 1;
+      var t = x;
+      for (var i = 0; i < 4; i += 1) {
+        var s = slope(t, x1, x2);
+        if (Math.abs(s) < 1e-5) break;
+        t -= (calc(t, x1, x2) - x) / s;
+      }
+      return calc(t, y1, y2);
+    };
+  })();
+
+  function animateRowBox(el, fromW, fromH, toW, toH, dur) {
+    if (!el) return;
+    var t0 = performance.now();
+    if (el.__mrBoxRaf) { try { cancelAnimationFrame(el.__mrBoxRaf); } catch (e) { } el.__mrBoxRaf = 0; }
+    function step(now) {
+      var t = Math.min(1, (now - t0) / dur);
+      var e = MR_EASE_FN(t);
+      var w = fromW + (toW - fromW) * e;
+      var h = fromH + (toH - fromH) * e;
+      try {
+        el.style.setProperty('width', w.toFixed(2) + 'px', 'important');
+        el.style.setProperty('height', h.toFixed(2) + 'px', 'important');
+      } catch (err) { }
+      if (t < 1) {
+        el.__mrBoxRaf = requestAnimationFrame(step);
+      } else {
+        el.__mrBoxRaf = 0;
+      }
+    }
+    /* v83：当前帧先同步写一次起始宽高，避免第一帧按 CSS 全宽闪一下 */
+    try {
+      el.style.setProperty('width', fromW.toFixed(2) + 'px', 'important');
+      el.style.setProperty('height', fromH.toFixed(2) + 'px', 'important');
+    } catch (err) { }
+    el.__mrBoxRaf = requestAnimationFrame(step);
+  }
+
+  function clearRowBoxAnim(el) {
+    if (!el) return;
+    if (el.__mrBoxRaf) { try { cancelAnimationFrame(el.__mrBoxRaf); } catch (e) { } el.__mrBoxRaf = 0; }
+    try { el.style.removeProperty('width'); el.style.removeProperty('height'); } catch (e) { }
+  }
+
   function applyRowHeight(px) {
     var h = (Math.round((px || 44) * 100) / 100) + 'px';
     try { document.documentElement.style.setProperty('--mr-track-row-h', h); } catch (e) { }
@@ -952,6 +1007,9 @@
     var dx = Math.round((r0.left - r1.left) * 100) / 100;
     var dy = Math.round((r0.top - r1.top) * 100) / 100;
     try {
+      /* v83：底栏槽宽 260 / 顶部条宽 316，只做 translate 会在起飞/落位时瞬间变宽变窄。
+         width/height 用 animateRowBox 内联驱动（WAAPI 的 width 会被 CSS !important 盖掉）。 */
+      animateRowBox(actions, r0.width, r0.height, r1.width, r1.height, MR_DUR);
       return actions.animate(
         [{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'translate(0px,0px)' }],
         { duration: MR_DUR, easing: MR_EASE, fill: 'both' }
@@ -964,13 +1022,19 @@
     var actions = findActions();
     var slot = findSlot();
     if (!actions) { bodyEl().classList.remove('mr-track-away'); trackDocked = false; return null; }
-    actions.classList.remove('mr-track-bg-on');
     if (!slot || !trackDocked) return null;
     var r1 = actions.getBoundingClientRect();
-    var rs = slot.getBoundingClientRect();
+    /* v83：目标 = 入栏后行会填充的 #controls 矩形（实测入栏行 rect 与 #controls 完全一致），
+       不再用 slot（占位符尺寸和行不同）也不用临时插拔 DOM。 */
+    var ctrl = controlsEl();
+    var cr = ctrl ? ctrl.getBoundingClientRect() : null;
+    var rs = cr ? { left: cr.left, top: cr.top, width: cr.width, height: r1.height } : slot.getBoundingClientRect();
     var dx = Math.round((rs.left - r1.left) * 100) / 100;
     var dy = Math.round((rs.top - r1.top) * 100) / 100;
     try {
+      /* v83：回程把 width/height 一起收到底栏槽尺寸，
+         否则落位时 dockTrackImmediate 换 DOM 会「缩一下」（用户看到的闪烁）。 */
+      animateRowBox(actions, r1.width, r1.height, rs.width, rs.height, MR_DUR);
       return actions.animate(
         [{ transform: 'translate(0px,0px)' }, { transform: 'translate(' + dx + 'px,' + dy + 'px)' }],
         { duration: MR_DUR, easing: MR_EASE, fill: 'both' }
@@ -985,6 +1049,7 @@
     if (actions) {
       actions.classList.remove('mr-top-track', 'mr-track-flying', 'mr-track-bg-on');
       try { actions.style.removeProperty('transform'); } catch (e) { }
+      clearRowBoxAnim(actions);
       if (controls && actions.parentElement !== controls) {
         var slot = findSlot();
         try {
@@ -1009,6 +1074,7 @@
     actions.classList.add('mr-top-track', 'mr-track-bg-on');
     actions.classList.remove('mr-track-flying');
     try { actions.style.removeProperty('transform'); } catch (e) { }
+    clearRowBoxAnim(actions);
     trackDocked = true;
   }
 
@@ -1115,6 +1181,32 @@
     var slot = findSlot();
     if (slot) { var h = slot.getBoundingClientRect().height; if (h > 0) return h; }
     return 44;
+  }
+
+  /* v83：量「真正入栏后」的几何：临时把行插回底栏量一次，再放回 body（同一任务内完成，不闪） */
+  function measureDockedRect(actions) {
+    var controls = controlsEl();
+    var slot = findSlot();
+    if (!actions || !controls) return null;
+    var parent = actions.parentElement;
+    var cls = actions.className;
+    var hadTransform = actions.style.transform;
+    try {
+      actions.classList.remove('mr-top-track', 'mr-track-flying', 'mr-track-bg-on');
+      actions.style.removeProperty('transform');
+      actions.style.removeProperty('width');
+      actions.style.removeProperty('height');
+      if (slot) controls.insertBefore(actions, slot);
+      else controls.insertBefore(actions, controls.firstChild);
+      var r = actions.getBoundingClientRect();
+      /* 放回原来的父节点（body）并恢复 class / transform */
+      if (parent) parent.appendChild(actions);
+      actions.className = cls;
+      if (hadTransform) actions.style.transform = hadTransform;
+      return { left: r.left, top: r.top, width: r.width, height: r.height };
+    } catch (e) {
+      return null;
+    }
   }
 
   /* ---- 转场结束后的宿主重活（绝不在动画窗口里跑） ---- */
