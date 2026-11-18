@@ -346,6 +346,21 @@
       if (pageState !== 'home' || isBusy()) return;
       if (!bodyEl() || bodyEl().classList.contains('splash-active')) return;
       if (bodyEl().classList.contains('empty-home-active')) return;   /* 首页还在，不是「离开首页」 */
+      /* v75：从搜索结果/歌单里点歌起播时，先把浮层收掉，否则浮层会盖在播放页上「看起来没变化」 */
+      try {
+        var sa = document.getElementById('search-area');
+        if (sa && sa.classList.contains('has-results')) {
+          try { clearSearchResults(); } catch (e) { }
+          try { setPeek(sa, false, 'search'); } catch (e) { }
+        }
+      } catch (e) { }
+      try {
+        var pp = document.getElementById('playlist-panel');
+        if (pp && (pp.classList.contains('show') || pp.classList.contains('peek'))) {
+          try { closePlaylistPanel(); } catch (e) { }
+        }
+      } catch (e) { }
+      try { setDiyPanel(false); } catch (e) { }
       enterPlayerPage();
     } catch (e) { }
   }
@@ -1406,35 +1421,33 @@
 
   /* ---- 返回键：先关浮层，不直接退出 App ---- */
   function closeTopOverlay() {
-    /* 转场进行中：返回键用来「接管/取消」当前转场，而不是落到宿主默认行为 */
     if (isBusy()) {
       commitInstant(pageState === 'to-player' ? 'player' : 'home');
       return true;
     }
-    /* v70：视觉控制台打开时，返回键只关面板（不动模式/不退出播放页） */
+    /* v75：先关最上层浮层，再退播放页（否则搜索/歌单盖在播放页上，按返回像没反应） */
     if (diyPanelOpen()) { setDiyPanel(false); return true; }
-    // 播放页：返回键回首页
-    if (pageState === 'player' || document.body.classList.contains('mr-player-page')) {
-      exitPlayerPage();
-      return true;
-    }
     var guide = document.getElementById('visual-guide');
     if (guide && guide.classList.contains('show')) { try { closeVisualGuide(true); } catch (e) { } return true; }
-    var panel = document.getElementById('playlist-panel');
-    if (panel && (panel.classList.contains('show') || panel.classList.contains('peek'))) { closePlaylistPanel(); return true; }
-    var login = document.getElementById('login-modal');
-    if (login && login.classList.contains('show')) { try { closeLoginModal(); } catch (e) { } return true; }
-    var fx = document.getElementById('fx-panel');
-    if (fx && (fx.classList.contains('show') || fx.classList.contains('peek'))) { try { setPeek(fx, false, 'fx'); } catch (e) { } return true; }
     var sa = document.getElementById('search-area');
     if (sa && sa.classList.contains('has-results')) {
       try { clearSearchResults(); } catch (e) { }
       try { setPeek(sa, false, 'search'); } catch (e) { }
       return true;
     }
+    var panel = document.getElementById('playlist-panel');
+    if (panel && (panel.classList.contains('show') || panel.classList.contains('peek'))) { closePlaylistPanel(); return true; }
+    var login = document.getElementById('login-modal');
+    if (login && login.classList.contains('show')) { try { closeLoginModal(); } catch (e) { } return true; }
+    var fx = document.getElementById('fx-panel');
+    if (fx && (fx.classList.contains('show') || fx.classList.contains('peek'))) { try { setPeek(fx, false, 'fx'); } catch (e) { } return true; }
+    /* 播放页：返回键回首页 */
+    if (pageState === 'player' || document.body.classList.contains('mr-player-page')) {
+      exitPlayerPage();
+      return true;
+    }
     if (document.body.classList.contains('splash-active')) return true;
-    /* 首页（无浮层）按返回：消费掉，不要落到宿主分支。
-       宿主那边是 goHome()，而 goHome 是开关语义（首页已显示时会 dismissHomePage 把首页关掉）。 */
+    /* 首页（无浮层）按返回：消费掉，不要落到宿主分支（goHome 是开关语义会 dismiss 首页） */
     if (pageState === 'home') return true;
     return false;
   }

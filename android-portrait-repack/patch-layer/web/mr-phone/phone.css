@@ -2884,3 +2884,7 @@ body.phone-shell #fx-panel.pinned{
     max-height:calc(100dvh - 120px)!important;
   }
 }
+
+/* ===== V75：DIY 键永远在控制台之上，面板打开时再点一下即可收回 ===== */
+body.phone-shell #bottom-bar #fx-fab{z-index:80!important;}
+body.phone-shell #fx-panel{z-index:60!important;}
