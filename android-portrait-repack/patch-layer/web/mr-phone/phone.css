@@ -1676,7 +1676,8 @@ body.mr-player-page #mr-player-extras{display:flex;}
 #mr-time-cur,#mr-time-dur{font:11px system-ui,-apple-system,sans-serif!important;color:#9fb8b1!important;min-width:34px!important;text-align:center!important;}
 body.mr-player-page #bottom-bar #controls > .control-cluster.transport{gap:10px!important;}
 body.phone-shell #user-btn{display:none!important;visibility:hidden!important;}
-body.phone-shell #phone-chrome-more{width:44px!important;height:44px!important;border-radius:14px!important;padding:0!important;display:flex!important;align-items:center!important;justify-content:center!important;overflow:hidden!important;}
+/* v81：尺寸统一走 --phone-chrome-height（原来写死 44px，和 58px 的搜索框不等高） */
+body.phone-shell #phone-chrome-more{width:var(--phone-chrome-height, 48px)!important;height:var(--phone-chrome-height, 48px)!important;border-radius:16px!important;padding:0!important;display:flex!important;align-items:center!important;justify-content:center!important;overflow:hidden!important;}
 body.phone-shell #phone-chrome-more img.phone-chrome-avatar{width:34px!important;height:34px!important;border-radius:10px!important;object-fit:cover!important;display:block!important;}
 body:has(#login-modal.show) #search-area,body:has(#login-modal.show) .phone-chrome-slot{display:none!important;}
 #login-modal{z-index:9600!important;display:flex!important;align-items:center!important;justify-content:center!important;
@@ -2250,4 +2251,27 @@ body.phone-shell.mr-diy-open #fx-panel .fx-fold-title small{
   white-space:normal!important;
   overflow:visible!important;
   line-height:1.3!important;
+}
+
+/* ===== v81：顶部 chrome 对齐（搜索框 ⇄ 三点按钮）=====
+   现象（其它手机实测）：搜索框 58px 高 / 三点按钮 44px 高，两者不等高；
+   窄屏（CSS 宽 < ~395）时 #search-area 的 right:clamp(52px,14vw,72px) 比「按钮 44 + 右距 12 = 56」
+   还小，搜索框右边缘会压进三点按钮 1.4~4px。
+   这里统一高度 + 预留「按钮 + 间距」的右侧空间，任何宽度都不重叠。 */
+body.phone-shell{
+  --phone-chrome-height: 48px;
+}
+body.phone-shell #search-area{
+  right: calc(clamp(68px, 15vw, 76px) + env(safe-area-inset-right, 0px))!important;
+}
+body.phone-shell #search-box{
+  height: var(--phone-chrome-height, 48px)!important;
+  border-radius: 16px!important;
+}
+body.phone-shell .phone-chrome-slot{
+  top: calc(6px + env(safe-area-inset-top, 0px))!important;
+}
+body.phone-shell #phone-chrome-more{
+  width: var(--phone-chrome-height, 48px)!important;
+  height: var(--phone-chrome-height, 48px)!important;
 }

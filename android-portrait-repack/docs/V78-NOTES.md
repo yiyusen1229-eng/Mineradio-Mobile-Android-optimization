@@ -164,3 +164,20 @@
 4. 动画中途再点 DIY：`cancelDiyClose()` 清定时器 + 移除 closing，面板从当前过渡状态平滑回弹。
 
 **验证**：screencast 逐帧（~50fps）面板区域亮度 19.7→26.0→27.4→28.6→29.7→31.3（5 帧连续收拢，无硬切），顶部搜索框/头像亮度 44.6/68.9 全程恒定（没有把 v78c/v79 修掉的闪帧带回来）；开/关/再开/动画中打断均正常，回归 23/23 PASS。
+---
+
+## 10. v81：顶部搜索框 ⇄ 三点按钮对齐（其它手机实测）
+
+**现象**：换到别的手机后，顶部搜索框右端与「⋯」按钮重叠，且两者高度不一致（搜索框 58px、按钮 44px）。
+
+**根因**（两套独立定位叠加）：
+1. `#search-area` 的 `right` 是 `clamp(52px, 14vw, 72px)`；按钮宽 44 + 右边距 12 = 56px。窄屏（CSS 宽 < ~395）时 52 < 56 → 搜索框右缘压进按钮 **1.4~4px**（实测 320~390 全中）。
+2. 按钮尺寸被旧规则 `body.phone-shell #phone-chrome-more{width:44px!important;height:44px!important}` 写死；搜索框被宿主 `#search-box{height:58px}` 覆盖。我们媒体查询里的 `--phone-chrome-height:48px` 实际上两边都没生效。
+
+**修法**（`phone.css` 末尾 v81 块 + 改旧规则）：
+- 旧 44px 规则改成 `var(--phone-chrome-height, 48px)` + 圆角 16；
+- `#search-area{right: calc(clamp(68px, 15vw, 76px) + env(safe-area-inset-right))}`（48 按钮 + 12 边距 + 8 间距）；
+- `#search-box{height:var(--phone-chrome-height,48px)!important}`；
+- `.phone-chrome-slot{top:calc(6px + env(safe-area-inset-top))}` 与搜索框顶对齐。
+
+**验证**：391×870 真机 → 搜索框 48×315 @ (8,52)、按钮 48×48 @ (331,52)：**gap=8、等高、顶对齐**；CDP 模拟 320/340/360/375/390/400/412/420/432/440/460/480/500/540/600/720 共 16 档视口，全部 `overlap=false`、`gap≥8`、高度恒 48；菜单下拉仍锚在按钮下方（right 对齐）；搜索展开/键盘布局正常；回归 23/23 PASS、10 组自适应矩阵无溢出。
