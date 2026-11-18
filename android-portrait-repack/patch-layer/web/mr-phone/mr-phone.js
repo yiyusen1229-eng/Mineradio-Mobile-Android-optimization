@@ -184,12 +184,20 @@
       ev.stopPropagation();
       try { ev.preventDefault(); } catch (e) { }
       try {
-        /* DIY 的目标就是打开视觉控制台；优先直接开面板，最后才退回宿主的 toggle */
+        /* DIY 键 = 视觉控制台开关：宿主 toggleFxPanel 要求 diyPlayerMode 已开启，先补齐再开/关 */
         var panel = document.getElementById('fx-panel');
-        if (panel) { setPeek(panel, !panel.classList.contains('peek'), 'fx'); return; }
-        if (typeof window.toggleFxPanel === 'function') { window.toggleFxPanel(); return; }
-        if (typeof window.openFxPanel === 'function') { window.openFxPanel(); return; }
-        if (typeof window.toggleDiyMode === 'function') window.toggleDiyMode();
+        var isOpen = !!(panel && (panel.classList.contains('show') || panel.classList.contains('peek')));
+        var diyOn = false;
+        try { diyOn = !!window.diyPlayerMode; } catch (e) { }
+        if (!isOpen && !diyOn) {
+          if (typeof window.toggleDiyMode === 'function') { window.toggleDiyMode(); }
+          else bodyEl().classList.add('diy-mode');
+        }
+        if (typeof window.toggleFxPanel === 'function') { window.toggleFxPanel(!isOpen); return; }
+        if (panel) {
+          setPeek(panel, !isOpen, 'fx');
+          return;
+        }
       } catch (e) { }
     }, true);
   }

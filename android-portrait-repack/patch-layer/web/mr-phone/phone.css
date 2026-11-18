@@ -2695,3 +2695,10 @@ body.phone-shell.mr-player-page #mr-player-extras{
 body.phone-shell #fx-fab{border-radius:14px!important;}
 body.phone-shell:not(.mr-player-page) #bottom-bar #controls > .control-cluster.actions{padding-right:52px!important;}
 body.phone-shell #bottom-bar{overflow:visible!important;}
+
+/* ===== V66：搜索层去掉多余的墨绿/黑色底框（面板自身已有背景） ===== */
+body.phone-shell #search-stack{
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+}
