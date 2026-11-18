@@ -116,6 +116,7 @@
 
 
   /* 宿主会把 DIY 浮动按钮重新显示出来（会压住卡片），这里用内联 important 兜底 */
+  /* v64：DIY 不再是浮在舞台上的悬浮球，而是底栏右上角的一个按钮（首页/播放页都在这里） */
   function hideFab() {
     var f = document.getElementById('fx-fab');
     if (!f) return;
@@ -125,20 +126,22 @@
       return;
     }
     var bar = document.getElementById('bottom-bar');
-    var barTop = bar ? bar.getBoundingClientRect().top : window.innerHeight - 100;
-    var key = Math.round(barTop) + '|' + (pageState === 'player');
+    if (!bar) return;
+    if (f.parentElement !== bar) { try { bar.appendChild(f); } catch (e) { } }
+    var key = 'bar|' + Math.round(bar.getBoundingClientRect().width) + '|' + (pageState === 'player');
     if (f.__mrPosKey === key && f.style.display === 'flex') return;
     f.__mrPosKey = key;
     var S = function (k, v) { try { f.style.setProperty(k, v, 'important'); } catch (e) { } };
     S('display', 'flex');
     S('visibility', 'visible');
     S('opacity', '1');
-    S('position', 'fixed');
-    S('right', '12px');
-    /* 底栏几何在 v62 已恒定：贴着底栏上沿 12px 即可，不再按页面状态分支 */
-    /* 播放页：DIY 球要抬到 4 键按钮组（词/音量/自动隐藏/沉浸）上方，否则会盖住最右边的音量键（v61 行为） */
-    S('bottom', (window.innerHeight - barTop + (pageState === 'player' ? 86 : 12)) + 'px');
-    S('z-index', '8550');
+    S('position', 'absolute');
+    S('right', '8px');
+    S('top', '8px');
+    S('bottom', 'auto');
+    S('left', 'auto');
+    S('margin', '0');
+    S('z-index', '6');
     S('width', '44px');
     S('height', '44px');
   }
@@ -217,21 +220,32 @@
     });
   }
 
+  /* v64：舞台（3D 画布 + 拖拽覆盖层）上的单击一律吞掉，不再触发宿主的相机重置/其它响应；
+     双击（或 320ms 内两次点击）才回正视角。底栏、4UI、DIY 的点击不受影响。 */
   function bindStageGuard() {
     if (window.__mrStageGuardBound) return;
     window.__mrStageGuardBound = 1;
     function isStageTarget(target) {
       if (!target || !target.closest) return false;
-      return !!target.closest('#canvas-container, canvas, #idle-guide-canvas');
+      return !!target.closest('#canvas-container, canvas, #idle-guide-canvas, #mr-stage-overlay');
     }
+    function recenterCamera() {
+      try {
+        if (typeof window.recenterCamera === 'function') { window.recenterCamera(); return; }
+        if (window.orbit) window.orbit.recentering = true;
+      } catch (e) { }
+    }
+    var lastTapAt = 0;
     ['click', 'dblclick'].forEach(function (type) {
       document.addEventListener(type, function (ev) {
         if (!document.body.classList.contains('mr-player-page')) return;
         if (ev.touches && ev.touches.length > 1) return;
         if (!isStageTarget(ev.target)) return;
-        ev.stopPropagation();
-        if (type === 'click' || type === 'dblclick') ev.preventDefault();
-        if (type === 'pointerdown') { try { window.__mrStageTapAt = performance.now(); } catch (e) { } }
+        var now = (window.performance && performance.now) ? performance.now() : Date.now();
+        if (type === 'dblclick') { lastTapAt = 0; recenterCamera(); }
+        else if (now - lastTapAt < 320) { lastTapAt = 0; recenterCamera(); }
+        else { lastTapAt = now; }
+        try { ev.stopPropagation(); ev.preventDefault(); } catch (e) { }
       }, true);
     });
   }
@@ -517,7 +531,7 @@
       extras = document.createElement('div');
       extras.id = 'mr-player-extras';
     }
-    if (extras.parentElement !== document.body) { try { document.body.appendChild(extras); } catch (e) { } }
+    if (extras.parentElement !== bar) { try { bar.appendChild(extras); } catch (e) { } }
     var modes = extras.querySelector('.control-cluster.modes') ||
       document.querySelector('#controls > .control-cluster.modes');
     if (modes && modes.parentElement !== extras) { try { extras.appendChild(modes); } catch (e) { } }
@@ -551,12 +565,12 @@
   /* v63b：播放页 4 键按钮组回到 v61 的 body 级 fixed 定位（贴着底栏上沿、右侧滑入滑出）。
      放回底栏内部会被旧的 `body.mr-player-page #bottom-bar #volume-btn{display:none}` 命中
      （音量键消失），弹层基准也会错位。这里只在转场/收尾时量一次底栏位置，不逐帧测量。 */
+  /* v64：4UI 现在是底栏右上角的绝对定位元素，位置全交给 CSS（含手机自适应），
+     这里只清掉旧版留下的内联 bottom，避免和 CSS 打架。 */
   function layoutPlayerExtrasPos() {
-    var bar = barEl();
     var extras = document.getElementById('mr-player-extras');
-    if (!bar || !extras) return;
-    var r = bar.getBoundingClientRect();
-    extras.style.bottom = (window.innerHeight - r.top + 8) + 'px';
+    if (!extras) return;
+    try { extras.style.removeProperty('bottom'); extras.style.removeProperty('top'); } catch (e) { }
   }
 
   function applyRowHeight(px) {
@@ -698,6 +712,7 @@
     var seq = ++transSeq;
     clearPageTimer();
     pageState = 'to-home';
+    try { hidePopovers(); } catch (e) { }
     setNavSuppressed(true);
     clearHomeInline();
     /* 用「显示首页」而不是开关：goHome() 有 dismiss 分支（会先把首页关掉再被 hack 拉回） */
@@ -1036,6 +1051,48 @@
     } catch (e) { }
   }
 
+  /* v64：弹层按触发按钮当前的 rect 相对定位（正上方、右对齐、距按钮 8px，带屏幕边界收敛）。
+     不用固定像素，手机自适应/横竖屏变化时弹层会跟着按钮走。 */
+  function placePopover(ctl, pop) {
+    if (!ctl || !pop) return;
+    var P = function (k, v) { try { pop.style.setProperty(k, v, 'important'); } catch (e) { } };
+    /* 挂到 body 下：避免被 #mr-player-extras 的 will-change:transform 变成 fixed 包含块 */
+    if (pop.parentElement !== document.body) { try { document.body.appendChild(pop); } catch (e) { } }
+    P('position', 'fixed');
+    P('right', 'auto');
+    P('top', 'auto');
+    P('visibility', 'visible');
+    P('opacity', '0');
+    P('pointer-events', 'none');
+    P('display', 'grid');
+    var r = ctl.getBoundingClientRect();
+    var w = pop.offsetWidth || 226;
+    var h = pop.offsetHeight || 150;
+    var left = Math.round(r.left + r.width / 2 - w / 2);
+    left = Math.max(8, Math.min(Math.max(8, window.innerWidth - w - 8), left));
+    var bottom = Math.max(8, Math.round(window.innerHeight - r.top + 8));
+    P('left', left + 'px');
+    P('bottom', bottom + 'px');
+    P('transform', 'none');
+    P('z-index', '9600');
+    P('opacity', '1');
+    P('pointer-events', 'auto');
+  }
+
+  function hidePopover(pop) {
+    if (!pop) return;
+    var P = function (k, v) { try { pop.style.setProperty(k, v, 'important'); } catch (e) { } };
+    P('opacity', '0');
+    P('visibility', 'hidden');
+    P('pointer-events', 'none');
+  }
+
+  function hidePopovers() {
+    hidePopover(document.getElementById('lyric-timing-popover'));
+    var vp = document.querySelector('.volume-popover');
+    hidePopover(vp);
+  }
+
   function bindVolumeTap() {
     if (window.__mrVolumeTap) return;
     window.__mrVolumeTap = 1;
@@ -1045,10 +1102,15 @@
       if (btn && ctl) {
         ev.stopPropagation();
         ev.preventDefault();
-        ctl.classList.toggle('mr-open');
+        var openNow = ctl.classList.toggle('mr-open');
+        if (openNow) placePopover(ctl, ctl.querySelector('.volume-popover'));
+        else hidePopover(ctl.querySelector('.volume-popover'));
         return;
       }
-      if (ctl && !(ev.target.closest && ev.target.closest('.volume-popover'))) ctl.classList.remove('mr-open');
+      if (ctl && !(ev.target.closest && ev.target.closest('.volume-popover'))) {
+        if (ctl.classList.contains('mr-open')) hidePopover(ctl.querySelector('.volume-popover'));
+        ctl.classList.remove('mr-open');
+      }
     }, true);
   }
 
@@ -1060,11 +1122,17 @@
       var ctl = document.querySelector('#mr-player-extras .lyric-timing-control');
       if (btn && ctl) {
         var wasOpen = ctl.classList.contains('mr-open');
-        if (wasOpen) ctl.classList.remove('mr-open');
-        else ctl.classList.add('mr-open');
+        if (wasOpen) {
+          ctl.classList.remove('mr-open');
+          hidePopover(ctl.querySelector('.lyric-timing-popover'));
+        } else {
+          ctl.classList.add('mr-open');
+          placePopover(ctl, ctl.querySelector('.lyric-timing-popover'));
+        }
         return;
       }
-      if (ctl && !(ev.target.closest && ev.target.closest('#lyric-timing-popover'))) {
+      if (ctl && !(ev.target.closest && ev.target.closest('.lyric-timing-popover'))) {
+        if (ctl.classList.contains('mr-open')) hidePopover(ctl.querySelector('.lyric-timing-popover'));
         ctl.classList.remove('mr-open');
       }
     }, true);
