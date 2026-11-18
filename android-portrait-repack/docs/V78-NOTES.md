@@ -125,3 +125,29 @@
 
 **修法**：`bindStageDrag` 的 touchmove 里，首次判定为拖拽（位移 >10px）时补调 `window.unlockCenteredView()` 并清 `orbit.recentering`；`registerPinchZoom` 的缩放同样解锁（否则半径也不生效）。
 **真机验证**：swipe 旋转 → θ -0.714 → 双击回正 → θ -0.003 / toast 视角回正 / `centerLocked=true` → 再 swipe → θ **-0.716**、`centerLocked=false`（画面跟随拖动）。
+---
+
+## 8. v79：点一下面板变回「旧废案」+ 提示条压歌曲信息
+
+### 8.1 为什么点一下会变成旧面板
+
+两个原因叠加：
+
+1. **CSS 被一个多余的 `}` 弄坏**：v78c 往 phone.css 插「常驻合成层」规则时多写了一个 `}`，Chrome 的解析器把紧随其后的「关态几何规则」整条丢掉了（`getComputedStyle` 里看不到它，`document.styleSheets` 里也没有）。
+2. **phone.css 里还留着 4 套旧面板几何**，只要宿主 auto-peek 给 `#fx-panel` 加上 `.peek`（首页点面板就会触发），就会命中其中一套：
+   - V62 底部抽屉：`top:auto;bottom:0;left:0;right:0;width:100%;transform:translateY(110%)`
+   - V62 `.peek/.show`：`bottom:120px; max-height:calc(100vh - 240px)` ← 用户截图那套「120px 贴底、630px 高」
+   - V70：`right:8px; bottom:bar+8; width:92vw; max-height:64dvh`
+   - 旧 console sheet：`.peek/.show/.pinned{right:0!important}`（还会把开态面板推到 right:0）
+
+**修法**：删掉多余的 `}`；4 套旧几何整条删除（不再「末尾追加覆盖」）；关态规则补 `.peek/.show/.pinned` 变体并强制 `opacity:0/visibility:hidden/pointer-events:none`；开态几何保持 V77 的 66.4/269.9/379.8/710.7。验证：开态/关态/关态+强制 .peek.show.pinned 三种状态都取到同一套几何，关态永远不可见。
+
+### 8.2 提示条压住歌曲信息
+
+`#source-fallback-stack` 是宿主**第一次弹提示时才创建**的节点（`ensureSourceFallbackStack()` 里 createElement + append 到 body）。v78 的「节点引用缓存」在启动后第一次 tick 把它缓存成 `null`，之后永远不刷新 → 提示条永远用宿主默认几何 `top:72px; right:24px`，正好压在播放页顶部歌曲信息条上。
+
+**修法**：引用失效（`!el || !el.isConnected`）就重查；位置每次按 `.mr-top-track` 的 bottom+8 重设（不再只设一次），并包装宿主 `showSourceFallbackNotice`，弹提示的同一帧就定位。真机：播放页 stack top=109（track bottom=101），8px 间隙、z-index 9600，不再重叠；首页无 track 时用 126px 兜底。
+
+### 8.3 键盘弹出时面板缩成小块
+
+点面板里的搜索框会弹软键盘，WebView 的布局视口从 870 变成 533，`top:31vh` + 底栏计算出的面板只剩 222px 高。加 `panelKbFit()`（监听 `visualViewport.resize` / `resize` / `focusin`/`focusout` + 500ms 调度器兜底）：键盘期间把面板钉成 `top=visTop+8 / height=可视高-16`，键盘收起立刻清掉内联、恢复 270/441。实测 8/517 ↔ 270/441 往返正常。

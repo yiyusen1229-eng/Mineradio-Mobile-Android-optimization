@@ -115,6 +115,7 @@
       hideFab();
       bindFab(document.getElementById('fx-fab'));
       updateProgressTimes();
+      try { patchFallbackNotice(); patchPlaylistEdgeTrigger(); } catch (e) { }
     } catch (e) { }
   }
 
@@ -124,6 +125,7 @@
     window.setInterval(function () {
       WATCH_TICK++;
       try { noticeWatch(); } catch (e) { }          /* 500ms */
+      try { panelKbFit(); } catch (e) { }
       if (WATCH_TICK % 4 === 0) classWatch();       /* 2.0s */
       if (WATCH_TICK % 5 === 0) layoutWatch();      /* 2.5s */
     }, 500);
@@ -278,9 +280,11 @@
       var fab = document.getElementById('fx-fab');
       if (fab) fab.classList.add('active');
       window.__mrDiyKeepTimer = window.setTimeout(keepDiyPanelOpen, 500);
+      try { panelKbFit(); } catch (e) { }
     } else {
       try { bodyEl().classList.remove('mr-diy-open'); } catch (e) { }
       panel.classList.remove('show', 'peek', 'pinned');
+      try { panelKbFit(); } catch (e) { }   /* 关面板时顺手清掉键盘期的内联钉高 */
       var fab2 = document.getElementById('fx-fab');
       if (fab2) fab2.classList.remove('active');
     }
@@ -288,6 +292,61 @@
 
   function diyPanelOpen() {
     return !!window.__mrDiyOpen;
+  }
+
+  /* v79：面板内输入框聚焦（软键盘弹出）时，WebView 的 vh 会变小，
+     面板几何（top:31vh + bottom:底栏）会缩成一个奇怪的小块，看起来像退回了旧版。
+     这里在键盘弹出期间把面板钉成「可视区内的整块表」，键盘收起立即恢复 CSS 几何。 */
+  var panelKbPinned = false;
+  var layoutBaseH = 0;
+  function panelKbFit() {
+    var panel = document.getElementById('fx-panel');
+    if (!panel) return;
+    var layH = window.innerHeight || 0;
+    if (!layoutBaseH) layoutBaseH = layH;
+    var vv = window.visualViewport || null;
+    var visH = vv ? vv.height : layH;
+    var visTop = vv ? vv.offsetTop : 0;
+    var ae = document.activeElement;
+    var textInput = !!(ae && panel.contains(ae) && /^(input|textarea)$/i.test(ae.tagName)
+      && !ae.readOnly && !ae.disabled
+      && (ae.type === '' || ae.type === 'text' || ae.type === 'search' || ae.type === 'url' || ae.type === 'email' || ae.type === 'number' || ae.type === 'tel' || ae.type === 'password'));
+    /* 键盘可能表现为「布局视口变小」（adjustResize）或「视觉视口变小」（adjustPan） */
+    var kbOpen = !!textInput && (layH < layoutBaseH - 80 || visH < layH - 80 || visH < layoutBaseH - 80);
+    if (!window.__mrDiyOpen || !kbOpen) {
+      if (!textInput && layH > 200) layoutBaseH = Math.max(layoutBaseH, layH);
+      if (panelKbPinned) {
+        panelKbPinned = false;
+        ['top', 'bottom', 'height', 'max-height'].forEach(function (k) { try { panel.style.removeProperty(k); } catch (e) { } });
+      }
+      return;
+    }
+    var top = Math.max(8, Math.round(visTop + 8));
+    var avail = Math.min(visH, layH) - top - 8;
+    var height = Math.max(180, Math.round(avail));
+    if (panelKbPinned && panel.__mrKbTop === top && panel.__mrKbH === height) return;
+    panelKbPinned = true;
+    panel.__mrKbTop = top;
+    panel.__mrKbH = height;
+    var S = function (k, v) { try { panel.style.setProperty(k, v, 'important'); } catch (e) { } };
+    S('top', top + 'px');
+    S('bottom', 'auto');
+    S('height', height + 'px');
+    S('max-height', 'none');
+  }
+  function bindPanelKeyboardFit() {
+    if (window.__mrPanelKbBound) return;
+    window.__mrPanelKbBound = 1;
+    var run = function () { try { panelKbFit(); } catch (e) { } };
+    try {
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', run);
+        window.visualViewport.addEventListener('scroll', run);
+      }
+      window.addEventListener('resize', run);
+      document.addEventListener('focusin', function () { window.setTimeout(run, 60); window.setTimeout(run, 220); }, true);
+      document.addEventListener('focusout', function () { window.setTimeout(run, 120); window.setTimeout(run, 320); }, true);
+    } catch (e) { }
   }
 
   /* 把宿主「DIY 玩家模式」固定打开（手机版不再暴露这个开关），并换回原包的 DIY 图标 */
@@ -333,8 +392,18 @@
     /* 点面板外：只关面板（不碰任何模式） */
     document.addEventListener('pointerdown', function (ev) {
       if (!diyPanelOpen()) return;
-      if (ev.target.closest && ev.target.closest('#fx-panel')) return;
-      if (ev.target.closest && ev.target.closest('#fx-fab')) return;
+      var t = ev.target;
+      if (t.closest && t.closest('#fx-panel')) return;
+      if (t.closest && t.closest('#fx-fab')) return;
+      /* v79：宿主的取色器/历史/搜索下拉等浮层是 append 到 body 的，DOM 不在 #fx-panel 内，
+         但视觉上就叠在面板上——按面板矩形做兜底判断，避免点这些地方把面板误关掉
+         （误关后宿主 auto-peek 会重新 .peek，就容易看到另一套旧几何）。 */
+      try {
+        var pb = document.getElementById('fx-panel').getBoundingClientRect();
+        var pad = 8;
+        if (ev.clientX >= pb.left - pad && ev.clientX <= pb.right + pad
+          && ev.clientY >= pb.top - pad && ev.clientY <= pb.bottom + pad) return;
+      } catch (e) { }
       setDiyPanel(false);
     }, true);
   }
@@ -1355,60 +1424,68 @@
   /* 播放页：把音源/提示条压到顶部歌曲信息下面，避免重叠 */
   /* 提示条：一出现就压到顶部歌曲信息下面，关闭时清掉内联。
      v78：节点引用缓存一次（原来每 500ms 4 次 getElementById），由 500ms 调度器驱动。 */
-  var noticeCache = null;
-  function noticeWatch() {
-    if (!noticeCache) {
-      noticeCache = {
-        stack: document.getElementById('source-fallback-stack'),
-        notice: document.getElementById('source-fallback-notice')
-      };
+  var noticeRefs = { stack: null, notice: null };
+  var noticePinnedTop = -1;
+  function noticeEls() {
+    var r = noticeRefs;
+    /* 关键：#source-fallback-stack 是宿主第一次弹提示时才创建并 append 到 body 的，
+       不能缓存 null 到永久（v78 的 bug：首个 500ms tick 时它还不存在 -> 之后永远拿不到）。 */
+    if (!r.stack || !r.stack.isConnected) r.stack = document.getElementById('source-fallback-stack');
+    if (!r.notice || !r.notice.isConnected) r.notice = document.getElementById('source-fallback-notice');
+    return r;
+  }
+  function noticeTopY() {
+    var track = document.querySelector('.mr-top-track');
+    if (track) {
+      var b = track.getBoundingClientRect();
+      if (b && b.bottom > 0) return Math.round(b.bottom + 8);
     }
-    {
-      var stack = noticeCache.stack;
-      if (stack) {
-        var hasCards = stack.children.length > 0;
-        if (hasCards && !stack.__mrPos) {
-          stack.__mrPos = 1;
-          try {
-            var track2 = document.querySelector('.mr-top-track');
-            var top2 = 126;
-            if (track2) top2 = Math.round(track2.getBoundingClientRect().bottom + 8);
-            var S2 = function (k, v) { stack.style.setProperty(k, v, 'important'); };
-            S2('position', 'fixed');
-            S2('top', top2 + 'px');
-            S2('left', '12px');
-            S2('right', '12px');
-            S2('width', 'auto');
-            S2('z-index', '9600');
-          } catch (e2) { }
-        } else if (!hasCards && stack.__mrPos) {
-          stack.__mrPos = 0;
-          ['position', 'top', 'left', 'right', 'width', 'z-index'].forEach(function (k) { try { stack.style.removeProperty(k); } catch (e3) { } });
-        }
-      }
-      var n = noticeCache.notice;
-      if (!n) return;
-      var shown = n.classList.contains('show');
-      if (shown && !n.__mrNoticePos) {
-        n.__mrNoticePos = 1;
-        try {
-          var track = document.querySelector('.mr-top-track');
-          var topY = 126;
-          if (track) topY = Math.round(track.getBoundingClientRect().bottom + 8);
-          var S = function (k, v) { n.style.setProperty(k, v, 'important'); };
-          S('position', 'fixed');
-          S('top', topY + 'px');
-          S('left', '12px');
-          S('right', '12px');
-          S('width', 'auto');
-          S('z-index', '9600');
-        } catch (e) { }
-      } else if (!shown && n.__mrNoticePos) {
-        n.__mrNoticePos = 0;
-        ['position', 'top', 'left', 'right', 'width', 'z-index'].forEach(function (k) { try { n.style.removeProperty(k); } catch (e) { } });
-      }
+    return 126;
+  }
+  function pinNotice(el, top) {
+    var S = function (k, v) { try { el.style.setProperty(k, v, 'important'); } catch (e) { } };
+    S('position', 'fixed');
+    S('top', top + 'px');
+    S('left', '12px');
+    S('right', '12px');
+    S('width', 'auto');
+    S('z-index', '9600');
+    el.__mrPos = 1;
+    el.__mrTop = top;
+  }
+  function unpinNotice(el) {
+    if (!el.__mrPos) return;
+    el.__mrPos = 0;
+    el.__mrTop = -1;
+    ['position', 'top', 'left', 'right', 'width', 'z-index'].forEach(function (k) { try { el.style.removeProperty(k); } catch (e) { } });
+  }
+  function noticeWatch() {
+    var refs = noticeEls();
+    var top = noticeTopY();
+    var stack = refs.stack;
+    if (stack) {
+      if (stack.children.length > 0) { if (!stack.__mrPos || stack.__mrTop !== top) pinNotice(stack, top); }
+      else unpinNotice(stack);
+    }
+    var n = refs.notice;
+    if (n) {
+      if (n.classList.contains('show')) { if (!n.__mrPos || n.__mrTop !== top) pinNotice(n, top); }
+      else unpinNotice(n);
     }
   }
+  function patchFallbackNotice() {
+    if (window.__mrFallbackNoticePatched) return true;
+    if (typeof window.showSourceFallbackNotice !== 'function') return false;
+    window.__mrFallbackNoticePatched = 1;
+    var raw = window.showSourceFallbackNotice;
+    window.showSourceFallbackNotice = function () {
+      var r = raw.apply(this, arguments);
+      try { requestAnimationFrame(function () { try { noticeWatch(); } catch (e) { } }); } catch (e) { try { noticeWatch(); } catch (e2) { } }
+      return r;
+    };
+    return true;
+  }
+
 
   function styleLoginModal() {
     var lm = document.getElementById('login-modal');
@@ -1636,6 +1713,7 @@
     initDiyConsole();
     startStructureObserver();
     startBarHeightWatch();
+    bindPanelKeyboardFit();
     ensureStructure();
     patchHostHooks();
     startWatchdog();

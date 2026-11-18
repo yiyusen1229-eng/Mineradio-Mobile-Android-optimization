@@ -223,19 +223,8 @@
     min-height: 36px;
   }
 
-  /* —— DIY console sheet (override diy-console.css mobile) —— */
-
-  body.phone-shell #fx-panel.show,
-  body.phone-shell #fx-panel.peek,
-  body.phone-shell #fx-panel.pinned,
-  body.phone-shell.diy-mode #fx-panel.fx-console.show,
-  body.phone-shell.diy-mode #fx-panel.fx-console.peek,
-  body.phone-shell.diy-mode #fx-panel.fx-console.pinned {
-    transform: translateY(0) !important;
-    opacity: 1 !important;
-    pointer-events: auto !important;
-    right: 0 !important;
-  }
+  /* v79b：删除旧 DIY console sheet 覆盖（right:0!important 会把开态面板推到 right:0，
+     与 V77 的 right:12px 冲突，看起来像另一套旧布局）。 */
 
 
 
@@ -1288,22 +1277,8 @@
     border-radius: 14px;
   }
 
-  body.phone-shell #fx-panel,
-  body.phone-shell.diy-mode #fx-panel.fx-console {
-    top: auto !important;
-    bottom: 0 !important;
-    left: 0 !important;
-    right: 0 !important;
-    width: 100% !important;
-    max-width: none !important;
-    height: auto !important;
-    max-height: min(82vh, calc(100vh - 48px - env(safe-area-inset-top, 0px))) !important;
-    border-radius: 22px 22px 0 0 !important;
-    z-index: 46;
-    transform: translateY(110%) !important;
-    opacity: 0;
-    pointer-events: none;
-  }
+  /* v79b：删除旧的「底部抽屉式面板」几何（top:auto/bottom:0/width:100%/translateY(110%)）。
+     它就是用户看到的「之前的废案」之一；V77 基座 + V78 开/关态规则已完全取代。 */
 
 
   /* ========== Folia poster wall ========== */
@@ -1716,8 +1691,10 @@ padding:12px 14px!important;background:rgba(8,16,16,.98)!important;border-bottom
 #login-modal .login-node-graph{padding:12px 10px 6px!important;}
 #login-modal .workflow-node{width:100%!important;}
 body.splash-active #search-area,body.splash-active .phone-chrome-slot,body.splash-active #user-btn,body.splash-active #fx-fab,body.splash-active #mr-player-extras{display:none!important;}
-body.phone-shell #fx-panel.peek,body.phone-shell #fx-panel.show{right:12px!important;z-index:8600!important;
-bottom:calc(120px + env(safe-area-inset-bottom,0px))!important;max-height:calc(100vh - 240px)!important;}
+/* v79：删除 V62 遗留的 #fx-panel.peek/.show 旧几何（bottom:120px / max-height:calc(100vh-240px)），
+   宿主 auto-peek 时面板会退回 120px 贴底、630px 高（用户看到的旧外观）。
+   几何统一由 V77 基座 + V78 开/关态规则管理。 */
+
 body.immersive-mode #fx-panel{display:none!important;}
 #mr-player-extras .volume-control:not(.mr-open) .volume-popover{opacity:0!important;visibility:hidden!important;pointer-events:none!important;}
 #mr-player-extras .volume-control.mr-open .volume-popover{opacity:1!important;visibility:visible!important;pointer-events:auto!important;}
@@ -1992,11 +1969,7 @@ body.phone-shell #search-stack{
 /* ================= V67 ================= */
 
 /* ① DIY 视觉控制台：手机层给面板补 display，否则点了只是加 class 但 display:none */
-body.phone-shell #fx-panel.show,
-body.phone-shell #fx-panel.peek,
-body.phone-shell #fx-panel.pinned{
-  display:block!important;visibility:visible!important;
-}
+/* v79b：删除 .show/.peek/.pinned 的 display/visibility 复位（V78 开态规则已包含；关态另有 .peek/.show/.pinned 强制隐藏）。 */
 
 /* ② 搜索：外层暗底去掉后，结果面板本身给足不透明度 */
 body.phone-shell #search-results{
@@ -2140,26 +2113,11 @@ body.phone-shell #bottom-bar #mr-player-extras{
   }
 }
 
-/* ================= V70：视觉控制台从 DIY 键位置弹出 ================= */
-body.phone-shell #fx-panel{
-  left:auto!important;right:8px!important;top:auto!important;
-  bottom:calc(var(--mr-bar-h, 140px) + 8px + env(safe-area-inset-bottom, 0px))!important;
-  width:min(92vw, 520px)!important;max-width:min(92vw, 520px)!important;
-  max-height:min(64dvh, calc(100dvh - 180px))!important;
-  border-radius:18px!important;
-  transform-origin:100% 100%!important;
-  transform:translate(14px, 22px) scale(.92)!important;
-  opacity:0;pointer-events:none!important;
-  transition:transform .30s cubic-bezier(.22,.9,.25,1), opacity .22s ease!important;
-  overflow:auto!important;
-  z-index:60!important;
-  padding-bottom:8px!important;
-}
-body.phone-shell #fx-panel.peek,
-body.phone-shell #fx-panel.show,
-body.phone-shell #fx-panel.pinned{
-  transform:none!important;opacity:1!important;pointer-events:auto!important;
-}
+/* v79：删除 V70 旧面板几何（right:8px / width:92vw / bottom:bar+8 / translate+scale 开场），
+   已被 V77 基座 + V78 开态/关态规则完全取代；留着只会在关态与宿主 class 组合时冒出旧外观。 */
+
+/* v79：同上一并删除（V70 的 .peek/.show/.pinned 复位，V78 开态规则已覆盖）。 */
+
 /* 横屏矮屏：面板不要顶到屏幕顶 */
 @media (orientation:landscape) and (max-height:520px){
   body.phone-shell #fx-panel{
@@ -2199,14 +2157,16 @@ body.phone-shell #search-area,
 body.phone-shell .phone-chrome-slot{
   will-change:transform;
 }
-}
 /* v78：关态不再 display:none —— display 切换会让浏览器跳过过渡，面板「硬切」出现，
    WebView 上肉眼就是闪一下（含一帧低分辨率栅格导致的糊）。保持 block，用透明度+轻微位移过渡；
    transition 在级联里优先级最高，能盖过下面这些 !important 终态。 */
-body.phone-shell:not(.mr-diy-open) #fx-panel{
+body.phone-shell:not(.mr-diy-open) #fx-panel,
+body.phone-shell:not(.mr-diy-open) #fx-panel.peek,
+body.phone-shell:not(.mr-diy-open) #fx-panel.show,
+body.phone-shell:not(.mr-diy-open) #fx-panel.pinned{
   display:block!important;
   opacity:0!important;
-  visibility:hidden;
+  visibility:hidden!important;
   pointer-events:none!important;
   /* v78b：关态盒子与开态同高同位（只在 transform 上做过渡），
      避免打开瞬间 top/bottom 跳变导致的一帧重排。
