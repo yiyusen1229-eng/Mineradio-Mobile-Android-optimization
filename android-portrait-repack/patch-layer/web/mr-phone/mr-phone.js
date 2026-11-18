@@ -2028,6 +2028,98 @@
     return true;
   }
 
+
+  /* ===== v102：面板预热 + 返回键收回动画 ===== */
+  var MR_WARM_PANELS = ['daily-recommend-panel', 'listen-history-panel', 'home-platform-recommend-mask'];
+  var mrPanelWarmState = { done: 0, timer: 0 };
+
+  function mrPanelOpenAnimatedClose(id) {
+    var mask = document.getElementById(id);
+    if (!mask || !mask.classList.contains('show')) return false;
+    if (id === 'daily-recommend-panel' && typeof window.closeDailyRecommendPanel === 'function') { window.closeDailyRecommendPanel(); return true; }
+    if (id === 'listen-history-panel' && typeof window.closeListenHistoryPanel === 'function') { window.closeListenHistoryPanel(); return true; }
+    if (id === 'home-platform-recommend-mask' && typeof window.closeHomePlatformRecommendations === 'function') { window.closeHomePlatformRecommendations(); return true; }
+    if (!mask.classList.contains('mr-panel-closing')) {
+      mask.classList.add('mr-panel-closing');
+      window.setTimeout(function () { mask.classList.remove('mr-panel-closing'); mask.classList.remove('show'); }, 220);
+    }
+    return true;
+  }
+
+  /* 返回键：优先按 z 序关闭我们管的面板（带收回动画） */
+  function patchBackButtonPanels() {
+    if (window.__mrBackPanelsPatched) return true;
+    if (typeof window.closeTopOverlay !== 'function') return false;
+    window.__mrBackPanelsPatched = 1;
+    var raw = window.closeTopOverlay;
+    window.closeTopOverlay = function () {
+      try {
+        var ids = ['home-platform-recommend-mask', 'daily-recommend-panel', 'listen-history-panel', 'lyric-online-modal', 'upload-panel'];
+        for (var i = 0; i < ids.length; i++) {
+          var el = document.getElementById(ids[i]);
+          if (!el) continue;
+          var isOpen = el.classList.contains('show') || (el.classList.contains('lyric-online-mask') && el.classList.contains('show'));
+          if (!isOpen) continue;
+          if (ids[i] === 'lyric-online-modal') { try { window.closeLyricOnlineSearch(); } catch (e) { } return true; }
+          if (ids[i] === 'upload-panel') { try { window.closeUploadPanel(); } catch (e) { el.classList.remove('show'); } return true; }
+          return mrPanelOpenAnimatedClose(ids[i]);
+        }
+      } catch (e) { }
+      return raw.apply(this, arguments);
+    };
+    return true;
+  }
+
+  /* 空闲预热：隐藏状态下把面板建好、数据拉一次，之后用户点开就是秒开 */
+  function mrWarmPanels() {
+    if (mrPanelWarmState.done) return;
+    if (mrPanelWarmState.timer) return;
+    mrPanelWarmState.timer = window.setTimeout(function () {
+      mrPanelWarmState.timer = 0;
+      if (document.hidden || window.playing === false && document.body.classList.contains('mr-player-page')) {
+        /* 播放页里不预热，等回到首页再说 */
+        mrPanelWarmState.timer = window.setTimeout(mrWarmPanels, 8000);
+        return;
+      }
+      mrPanelWarmState.done = 1;
+      try {
+        document.body.classList.add('mr-prewarming');
+        var finish = function () {
+          window.setTimeout(function () {
+            try {
+              MR_WARM_PANELS.forEach(function (id) {
+                var m = document.getElementById(id);
+                if (!m) return;
+                m.classList.remove('show');
+                m.classList.remove('mr-panel-closing');
+              });
+              try { if (window.__mrDiscoveryPanels && window.__mrDiscoveryPanels.state) { } } catch (e) { }
+              if (window.dailyState) window.dailyState.open = false;
+              if (window.historyState) window.historyState.open = false;
+              if (window.homePlatformRecommendationState) window.homePlatformRecommendationState.open = false;
+            } catch (e) { }
+            try { document.body.classList.remove('mr-prewarming'); } catch (e) { }
+          }, 700);
+        };
+        try { if (typeof window.openListenHistoryPanel === 'function') window.openListenHistoryPanel(); } catch (e) { }
+        try { if (typeof window.openDailyRecommendPanel === 'function') window.openDailyRecommendPanel(); } catch (e) { }
+        try { if (typeof window.openHomePlatformRecommendations === 'function') window.openHomePlatformRecommendations(); } catch (e) { }
+        /* 歌单数据预热：只拉数据（缓存到 /api 缓存），避免首次打开等网络 */
+        try { if (typeof window.refreshUserPlaylists === 'function') window.refreshUserPlaylists(true); } catch (e) { }
+        finish();
+      } catch (e) {
+        try { document.body.classList.remove('mr-prewarming'); } catch (e2) { }
+      }
+    }, 6000);
+  }
+
+  /* 回首页时再预热一次（播放页里不预热） */
+  function mrMaybeWarmOnHome() {
+    try {
+      if (document.body.classList.contains('empty-home-active') && !document.body.classList.contains('mr-player-page')) mrWarmPanels();
+    } catch (e) { }
+  }
+
   function startWatchdog() {
     if (window.__mrWatchdog) return;
     window.__mrWatchdog = 1;
@@ -2043,6 +2135,10 @@
         try { patchHomeLibraryEntry(); } catch (e) { }
         try { patchLyricAux(); } catch (e) { }
         try { patchLyricOnlineSearchSpeed(); } catch (e) { }
+        try { patchBackButtonPanels(); } catch (e) { }
+    try { patchBackButtonPanels(); } catch (e) { }
+    try { mrWarmPanels(); } catch (e) { }
+    try { window.setInterval(mrMaybeWarmOnHome, 4000); } catch (e) { }
     try { patchLyricOnlineSearchSpeed(); } catch (e) { }
     try { patchLyricAux(); } catch (e) { }
         try { patchDiscoveryPanelsAnimation(); } catch (e) { }
@@ -3785,6 +3881,20 @@
       return true;
     }
     /* v75：先关最上层浮层，再退播放页（否则搜索/歌单盖在播放页上，按返回像没反应） */
+    /* v102: close top discovery/lyric panels first (with closing animation) */
+    try {
+      var mrTopIds = ['home-platform-recommend-mask', 'daily-recommend-panel', 'listen-history-panel', 'lyric-online-modal'];
+      for (var mri = 0; mri < mrTopIds.length; mri++) {
+        var mrEl = document.getElementById(mrTopIds[mri]);
+        if (!mrEl || !mrEl.classList.contains('show')) continue;
+        if (mrTopIds[mri] === 'lyric-online-modal') { try { closeLyricOnlineSearch(); } catch (e2) { } return true; }
+        if (typeof mrPanelOpenAnimatedClose === 'function') return mrPanelOpenAnimatedClose(mrTopIds[mri]);
+        mrEl.classList.remove('show');
+        return true;
+      }
+      var mrUp = document.getElementById('upload-panel');
+      if (mrUp && mrUp.classList.contains('show')) { try { closeUploadPanel(); } catch (e3) { mrUp.classList.remove('show'); } return true; }
+    } catch (e0) { }
     if (diyPanelOpen()) { setDiyPanel(false); return true; }
     var guide = document.getElementById('visual-guide');
     if (guide && guide.classList.contains('show')) { try { closeVisualGuide(true); } catch (e) { } return true; }

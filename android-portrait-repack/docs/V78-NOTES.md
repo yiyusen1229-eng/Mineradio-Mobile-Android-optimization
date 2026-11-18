@@ -731,3 +731,33 @@ v99 的「音」只是本地把假名转罗马音，汉字保留原样（`地上
 二人だけの空が広がる夜に    →  fu ta ri da ke no so ra ga hi ro ga ru yo ru n
 ```
 （汉字读音来自平台 romalrc，缓存 key `netease:1409311773`）
+---
+
+## 31. v102：五个面板打开卡顿 + 返回键收回动画
+
+### 31.1 卡顿主因：大面板实时模糊
+`phone.css` 里有一条 `html.control-glass-svg-ok body.phone-shell #playlist-panel, ... #fx-panel { backdrop-filter: blur(22px) }`。
+Android WebView 对大面积 `backdrop-filter` 需要每帧重新采样背景，动画期间必然掉帧。修复：
+- 用同等/更高特异性覆盖成 `backdrop-filter: none`（`html body.phone-shell #playlist-panel` / `#fx-panel`）；
+- 换成深色实底（`rgba(7,12,15,.985)` / `rgba(9,13,17,.975)`）；
+- 每日推荐 / 最近播放 / 平台推荐的弹层同样去掉模糊，遮罩改纯色 `rgba(2,6,8,.84)`；
+- 列表容器加 `contain: layout paint style`，动画期间只合成 transform/opacity。
+
+### 31.2 打开不再现建：空闲预热
+新增 `mrWarmPanels()`：启动 6s 后（`body.mr-prewarming` 时 CSS 隐藏）依次
+`openListenHistoryPanel()`、`openDailyRecommendPanel()`、`openHomePlatformRecommendations()`、
+`refreshUserPlaylists(true)`，700ms 后把面板全部无声关闭。之后用户点开只是 show/hide，DOM 和数据都已就绪；
+`/api` 数据走已有的 IndexedDB 本地缓存（20 分钟 TTL）。
+
+### 31.3 返回键收回动画
+在 `closeTopOverlay()` 最前面加入弹层判断（按 z 序）：
+`home-platform-recommend-mask` → `daily-recommend-panel` → `listen-history-panel` →
+`lyric-online-modal` → `upload-panel`，全部走 `mr-panel-closing` 0.22s 收回动画，而不是直接 `goHome()`。
+
+### 31.4 实测（打开动画期间 rAF 帧间隔）
+| 面板 | avg | p95 | jank(>32ms) |
+|---|---|---|---|
+| 每日推荐 | 17.0ms | 16.7ms | 1 |
+| 最近播放 | 17.6ms | 16.7ms | 2 |
+| 音乐库 | 17.6ms | 16.8ms | 2 |
+| 平台推荐 | 22.3ms | 16.7ms | 2 |

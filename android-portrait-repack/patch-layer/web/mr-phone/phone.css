@@ -2775,3 +2775,48 @@ body:has(#home-platform-recommend-mask.show) #phone-chrome-slot{
   color: #eafffb!important;
 }
 body.phone-shell:not(.mr-player-page) #mr-lyric-aux{ display: none!important; }
+
+/* ===== v102：大面板去实时模糊（Android WebView 掉帧主因）+ 预热态隐藏 ===== */
+body.phone-shell #playlist-panel,
+body.phone-shell #fx-panel,
+body.phone-shell .modal-mask .modal,
+body.phone-shell #daily-recommend-panel .discovery-panel-modal,
+body.phone-shell #listen-history-panel .discovery-panel-modal,
+body.phone-shell #home-platform-recommend-mask .home-platform-recommend-modal{
+  -webkit-backdrop-filter: none!important;
+  backdrop-filter: none!important;
+  filter: none!important;
+}
+body.phone-shell #playlist-panel{
+  background: rgba(7, 12, 15, .985)!important;
+}
+body.phone-shell .modal-mask.show,
+body.phone-shell #daily-recommend-panel.show,
+body.phone-shell #listen-history-panel.show,
+body.phone-shell #home-platform-recommend-mask.show{
+  background: rgba(2, 6, 8, .84)!important;
+}
+/* 大面板内的列表做布局隔离，动画时只合成 transform/opacity */
+body.phone-shell .discovery-panel-list,
+body.phone-shell #home-platform-recommend-list,
+body.phone-shell #pl-list{
+  contain: layout paint style!important;
+}
+/* 预热态：面板建好但不显示 */
+body.mr-prewarming #daily-recommend-panel,
+body.mr-prewarming #listen-history-panel,
+body.mr-prewarming #home-platform-recommend-mask{
+  opacity: 0!important;
+  pointer-events: none!important;
+}
+
+/* v102b：用同等/更高特异性压掉 control-glass 派的 22px 模糊（这是面板打开卡顿主因） */
+html body.phone-shell #playlist-panel,
+html.control-glass-svg-ok body.phone-shell #playlist-panel,
+html body.phone-shell #fx-panel,
+html.control-glass-svg-ok body.phone-shell #fx-panel{
+  -webkit-backdrop-filter: none!important;
+  backdrop-filter: none!important;
+}
+html body.phone-shell #playlist-panel{ background: rgba(7, 12, 15, .985)!important; }
+html body.phone-shell #fx-panel{ background: rgba(9, 13, 17, .975)!important; }
