@@ -90,6 +90,7 @@
       if (isBusy()) return;         /* 转场窗口内绝不测量/重排 */
       try {
         ensureStructure();
+        layoutPlayerExtrasPos();
         reorderProgressBar();
         layoutPhoneBar();
         styleLoginModal();
@@ -135,7 +136,8 @@
     S('position', 'fixed');
     S('right', '12px');
     /* 底栏几何在 v62 已恒定：贴着底栏上沿 12px 即可，不再按页面状态分支 */
-    S('bottom', (window.innerHeight - barTop + 12) + 'px');
+    /* 播放页：DIY 球要抬到 4 键按钮组（词/音量/自动隐藏/沉浸）上方，否则会盖住最右边的音量键（v61 行为） */
+    S('bottom', (window.innerHeight - barTop + (pageState === 'player' ? 86 : 12)) + 'px');
     S('z-index', '8550');
     S('width', '44px');
     S('height', '44px');
@@ -515,7 +517,7 @@
       extras = document.createElement('div');
       extras.id = 'mr-player-extras';
     }
-    if (extras.parentElement !== bar) { try { bar.appendChild(extras); } catch (e) { } }
+    if (extras.parentElement !== document.body) { try { document.body.appendChild(extras); } catch (e) { } }
     var modes = extras.querySelector('.control-cluster.modes') ||
       document.querySelector('#controls > .control-cluster.modes');
     if (modes && modes.parentElement !== extras) { try { extras.appendChild(modes); } catch (e) { } }
@@ -544,6 +546,17 @@
       }
     }
     updateProgressTimes();
+  }
+
+  /* v63b：播放页 4 键按钮组回到 v61 的 body 级 fixed 定位（贴着底栏上沿、右侧滑入滑出）。
+     放回底栏内部会被旧的 `body.mr-player-page #bottom-bar #volume-btn{display:none}` 命中
+     （音量键消失），弹层基准也会错位。这里只在转场/收尾时量一次底栏位置，不逐帧测量。 */
+  function layoutPlayerExtrasPos() {
+    var bar = barEl();
+    var extras = document.getElementById('mr-player-extras');
+    if (!bar || !extras) return;
+    var r = bar.getBoundingClientRect();
+    extras.style.bottom = (window.innerHeight - r.top + 8) + 'px';
   }
 
   function applyRowHeight(px) {
@@ -654,6 +667,7 @@
     try { window.homeForcedOpen = false; } catch (e) { }
     clearHomeInline();
     ensureStructure();
+    layoutPlayerExtrasPos();
     bodyEl().classList.add('mr-transitioning', 'mr-player-page', 'mr-player-entering');
     flightAnim = liftTrackRow();
     if (flightAnim && flightAnim.finished && flightAnim.finished.then) {
@@ -743,6 +757,7 @@
 
   /* ---- 转场结束后的宿主重活（绝不在动画窗口里跑） ---- */
   function runHostAfterEnter() {
+    layoutPlayerExtrasPos();
     try {
       if (typeof setImmersiveMode === 'function') {
         if (hostImmersiveOn()) bodyEl().classList.add('immersive-mode');

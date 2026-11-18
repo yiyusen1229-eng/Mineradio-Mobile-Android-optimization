@@ -2447,7 +2447,7 @@ body.mr-return-home #bottom-bar{animation:mrBarFold .56s cubic-bezier(.22,.9,.25
 @keyframes mrTopIn{from{transform:translateY(-160%);opacity:0}to{transform:none;opacity:1}}
 @keyframes mrTopOut{to{transform:translateY(-160%);opacity:0}}
 @keyframes mrRightIn{from{transform:translateX(150%);opacity:0}to{transform:none;opacity:1}}
-@keyframes mrRightOut{to{transform:translateX(150%);opacity:0}}
+@keyframes mrRightOut{from{transform:none;opacity:1}to{transform:translateX(150%);opacity:0}}
 @keyframes mrBarFold{0%{transform:translateY(0);opacity:1}42%{transform:translateY(135%);opacity:0}100%{transform:translateY(0);opacity:1}}
 /* ===== 底栏半透明 + 毛玻璃 ===== */
 body.phone-shell #bottom-bar{background:rgba(8,14,16,.42)!important;backdrop-filter:blur(18px)!important;-webkit-backdrop-filter:blur(18px)!important;border:1px solid rgba(255,255,255,.10)!important;box-shadow:0 10px 30px rgba(0,0,0,.28)!important;}
@@ -2622,17 +2622,25 @@ body.phone-shell.mr-just-home #bottom-bar{
 
 /* —— 播放页顶部槽位按钮组：永久在底栏内，绝对覆盖顶部槽位 —— */
 body.phone-shell #mr-player-extras{
-  position:absolute!important;top:8px!important;left:12px!important;right:12px!important;
-  height:var(--mr-row-h)!important;min-height:var(--mr-row-h)!important;max-height:var(--mr-row-h)!important;
-  z-index:3!important;box-sizing:border-box!important;
+  position:fixed!important;top:auto!important;left:10px!important;right:10px!important;
+  height:var(--mr-row-h)!important;
+  z-index:8500!important;box-sizing:border-box!important;
   display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:6px!important;
-  opacity:0;visibility:hidden;pointer-events:none!important;transform:translateY(4px);
-  animation:none!important;
-  transition:opacity var(--mr-dur) var(--mr-ease),transform var(--mr-dur) var(--mr-ease),visibility 0s linear var(--mr-dur)!important;
+  opacity:0;visibility:hidden;pointer-events:none!important;transform:translateX(150%);
+  transition:visibility 0s linear .42s!important;
 }
 body.phone-shell.mr-player-page #mr-player-extras{
-  opacity:1!important;visibility:visible!important;pointer-events:auto!important;transform:none!important;
-  transition:opacity var(--mr-dur) var(--mr-ease),transform var(--mr-dur) var(--mr-ease),visibility 0s linear 0s!important;
+  opacity:1;visibility:visible;pointer-events:auto!important;transform:none;
+  animation:mrRightIn .42s .12s cubic-bezier(.22,.9,.25,1) both!important;
+}
+body.phone-shell.mr-return-home #mr-player-extras{
+  visibility:visible!important;opacity:1;transform:none;pointer-events:none!important;
+  animation:mrRightOut .3s ease both!important;
+}
+/* 音量键兜底：extras 已不在底栏里，这条覆盖旧规则的 `#bottom-bar #volume-btn{display:none}` */
+body.phone-shell.mr-player-page #mr-player-extras #volume-control,
+body.phone-shell.mr-player-page #mr-player-extras #volume-btn{
+  display:flex!important;visibility:visible!important;opacity:1!important;
 }
 body.phone-shell #mr-player-extras > .control-cluster.modes{
   display:flex!important;align-items:center!important;height:calc(var(--mr-row-h) - 4px)!important;
