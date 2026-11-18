@@ -495,3 +495,17 @@ scroll（rAF 节流）里重新执行 `$ql.innerHTML = ...` → 所有 `.queue-i
 - 包装 `homeDashboardRenderVideoActions`：有图时按钮变「更换背景图 / 移除背景图」；包装 `clearHomeDashboardVideo`：有图时清图片。
 
 实测：模拟选图 → img 出现、meta 落地、按钮改名、视频元素移除；重启后图片仍在；清除后 img/meta 均空；回归 23/23 PASS。
+---
+
+## 22. v93：DIY 面板「搜索行 + 标签栏」磨砂（v92 改错了对象）
+
+用户指的框是 DIY 面板里的**搜索行 + 6 个标签栏**，不是面板标题栏（`.fx-head`）。目标：
+
+- `#fx-console-toolbar`（工具条，含 `.fx-console-search-row` 搜索胶囊、`.fx-console-tool-btn` 撤销/历史按钮）
+- `#fx-panel-tabs`（常用/界面/歌词/动效/歌单架/系统）
+
+样式：`background: rgba(9,12,16,.88)`、`backdrop-filter: blur(22px) saturate(160%)`、1px 边框、圆角 14px；
+搜索胶囊 `rgba(255,255,255,.055)`、工具按钮 `rgba(255,255,255,.07)`、tab 选中 `rgba(255,255,255,.115)`。
+
+实测 computed：toolbar、tabs 都是 `bg rgba(9,12,16,.88)` / `blur(22px) saturate(1.6)` / `radius 14px`；
+壁纸不再透到文字上；回归 23/23 PASS。
