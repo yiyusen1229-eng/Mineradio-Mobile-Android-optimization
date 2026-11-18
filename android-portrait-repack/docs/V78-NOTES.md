@@ -607,3 +607,37 @@ v88 的搜索超时会返回哨兵 `{ok:false,error:'MR_SEARCH_TIMEOUT',songs:[]
 点了会跳播放页的原因：宿主「点首页空白处 = 收起首页」的判定 `isHomeBlankDismissClick` 把这几块 div 当成空白，
 再被手机层「离开首页→进播放页」的钩子接上。修复：包装 `isHomeBlankDismissClick`，点击落在
 `#home-insight-dock / .home-hero / .home-card / .home-discovery-strip / .home-ranking-entry` 等区域时一律返回 false。
+---
+
+## 26. v97：导入入口 / 快捷卡 / 隐藏UI·全沉浸 / 语音输入排查
+
+### 26.1 三点菜单加「导入」
+`#phone-chrome-menu-actions` 追加「导入」→ `toggleUploadPanel()`（宿主上传/导入面板，含本机音乐/文件夹导入）。
+
+### 26.2 恢复 音乐库 / 每日推荐 / 最近播放
+宿主 `#empty-home .home-grid.home-quick-grid`（4 张卡：CONTINUE / LIBRARY 音乐库 / DAILY MIX 每日推荐 / RECENT 最近播放）
+被手机 CSS `display:none`。恢复：grid 三列、`order:2`（紧跟 hero）、隐藏 featured（CONTINUE），
+并覆盖宿主给桌面竖排预留的 `max-width: calc(100% - 62px)`（否则标题只剩一个字 + 省略号）。
+点击行为沿用宿主：`openHomeDashboardLibrary()` / `playHomeDaily()` / `playHomeRecent()`。
+
+### 26.3 「隐藏UI」「全沉浸」在手机端生效
+- `#controls-hide-btn` → 覆盖 `toggleControlsAutoHide()`：切换 `body.mr-ui-hidden`（隐藏 chrome/底栏/搜索/DIY/面板）；
+- `#immersive-btn` → 覆盖 `toggleImmersiveMode()`：切换 `body.mr-immersive`（连首页/顶部歌条一起隐藏，并尽力 `requestFullscreen()`）；
+- 两种状态都会浮出「显示界面」小圆点，点击恢复。
+（原生桥没有 system bars API，状态栏/导航栏不能从网页层隐藏，只能靠 WebView 全屏 API 尽力而为。）
+
+### 26.4 语音输入排查（重要）
+「播放时无法语音输入」的根因不在音频：实测点击搜索框后
+- `#search-input` 的 rect 是 `y≈-1`（在屏幕外），`#search-box` 计算样式 `visibility:hidden`，`#search-area` 在 `y=-12`；
+- `document.activeElement` 为空，`dumpsys input_method` 显示 `mInputShown=false`——**系统键盘/输入法根本不会弹出**，
+  所以 IME 的语音输入按钮自然用不了。
+
+已加「聚焦搜索时暂停播放」兜底（document 级 focusin；离开搜索未提交 700ms 后恢复），但因为输入框拿不到焦点没有触发。
+下一步应先修手机端搜索栏的焦点链路（把 `#search-box`/`#search-input` 在搜索态移回可视区、可点击、可聚焦），
+再验证键盘与语音输入。
+
+### 26.5 「朋友搜周杰伦没结果、我这边有」的解释
+酷狗搜索接口按地区/IP/账号登录态/频控返回内容不同；另外朋友如果装的是旧版（v93 及更早），
+缓存里可能存过 v88 的「超时空包」（`MR_SEARCH_TIMEOUT` 空结果）导致同一关键词永远空。
+v94 起已修：缓存 DB 换 `mr-api-cache-v2`、哨兵不存不读、空结果带 cache-buster 重试。
+建议让朋友升级到 v97 再试；如果仍空，多半是该网络/IP 被酷狗限流。

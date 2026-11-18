@@ -1367,6 +1367,159 @@
     return true;
   }
 
+
+  /* ===== v97：导入入口 / 恢复快捷卡 / 隐藏UI+全沉浸 / 搜索时暂停 ===== */
+
+  /* ---- 恢复「隐藏UI / 全沉浸」在手机端的行为 ---- */
+  var mrUiHidden = { mode: '', restore: null };
+  function mrEnsureRestorePill() {
+    if (mrUiHidden.restore && document.body.contains(mrUiHidden.restore)) return mrUiHidden.restore;
+    var pill = document.createElement('button');
+    pill.type = 'button';
+    pill.id = 'mr-ui-restore';
+    pill.textContent = '显示界面';
+    pill.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      mrSetUiHidden('');
+    });
+    document.body.appendChild(pill);
+    mrUiHidden.restore = pill;
+    return pill;
+  }
+  function mrSetUiHidden(mode) {
+    mrUiHidden.mode = mode || '';
+    try {
+      document.body.classList.toggle('mr-ui-hidden', mode === 'ui');
+      document.body.classList.toggle('mr-immersive', mode === 'immersive');
+      var pill = mrEnsureRestorePill();
+      pill.style.display = mode ? '' : 'none';
+      /* 尽力而为：WebView 支持全屏 API 时顺带隐藏系统栏 */
+      if (mode === 'immersive') {
+        try {
+          if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(function () { });
+          }
+        } catch (e) { }
+      } else {
+        try {
+          if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () { });
+        } catch (e) { }
+      }
+      if (typeof window.showToast === 'function') {
+        window.showToast(mode === 'ui' ? '已隐藏界面（点「显示界面」恢复）' : (mode === 'immersive' ? '全沉浸模式（点「显示界面」退出）' : '已恢复界面'));
+      }
+    } catch (e) { }
+  }
+  function patchUiHideControls() {
+    if (window.__mrUiHidePatched) return true;
+    window.__mrUiHidePatched = 1;
+    var rawControls = window.toggleControlsAutoHide;
+    if (typeof rawControls === 'function') {
+      window.toggleControlsAutoHide = function () {
+        /* 手机端：这个按钮做成「隐藏UI」开关 */
+        mrSetUiHidden(mrUiHidden.mode === 'ui' ? '' : 'ui');
+      };
+    }
+    var rawImmersive = window.toggleImmersiveMode;
+    if (typeof rawImmersive === 'function') {
+      window.toggleImmersiveMode = function () {
+        mrSetUiHidden(mrUiHidden.mode === 'immersive' ? '' : 'immersive');
+      };
+    }
+    /* 点舞台空白（隐藏态下）也恢复 */
+    document.addEventListener('click', function (ev) {
+      if (!mrUiHidden.mode) return;
+      var t = ev.target;
+      if (t && t.closest && t.closest('#mr-ui-restore, #bottom-bar, #phone-chrome-slot, #search-area, #fx-fab, #playlist-panel')) return;
+    }, true);
+    return true;
+  }
+
+  /* ---- 首页恢复三张快捷卡（音乐库 / 每日推荐 / 最近播放）---- */
+  function patchHomeQuickCards() {
+    if (window.__mrQuickCardsPatched) return true;
+    var grid = document.querySelector('#empty-home .home-grid.home-quick-grid');
+    if (!grid) return false;
+    window.__mrQuickCardsPatched = 1;
+    try { grid.style.display = ''; } catch (e) { }
+    return true;
+  }
+
+  /* ---- 菜单加「导入」（走宿主导入面板）---- */
+  function patchImportMenuButton() {
+    if (window.__mrImportMenuPatched) return true;
+    var actions = document.getElementById('phone-chrome-menu-actions');
+    if (!actions) return false;
+    window.__mrImportMenuPatched = 1;
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'phone-chrome-action';
+    btn.textContent = '导入';
+    btn.addEventListener('click', function () {
+      try { toggleMenu(false); } catch (e) { }
+      try {
+        if (typeof window.toggleUploadPanel === 'function') { window.toggleUploadPanel(); return; }
+      } catch (e) { }
+      try { if (typeof window.openHomeLocalImport === 'function') { window.openHomeLocalImport(); return; } } catch (e) { }
+      try { if (typeof window.openUploadPanel === 'function') window.openUploadPanel(); } catch (e) { }
+    });
+    actions.appendChild(btn);
+    return true;
+  }
+
+  /* ---- 播放时语音输入：聚焦搜索框先暂停，离开搜索未提交再恢复 ---- */
+  var mrSearchPause = { wasPlaying: false, pausedByUs: false };
+  function patchSearchPauseForVoice() {
+    if (window.__mrSearchPausePatched) return true;
+    var area = document.getElementById('search-area');
+    if (!area) return false;
+    window.__mrSearchPausePatched = 1;
+    function pauseForSearch() {
+      try {
+        if (mrSearchPause.resumeTimer) { window.clearTimeout(mrSearchPause.resumeTimer); mrSearchPause.resumeTimer = 0; }
+        var a = window.audio;
+        if (!a || a.paused) return;
+        if (!window.playing) return;
+        mrSearchPause.wasPlaying = true;
+        mrSearchPause.pausedByUs = true;
+        a.pause();
+        try { if (typeof window.setPlayIcon === 'function') window.setPlayIcon(false); } catch (e) { }
+      } catch (e) { }
+    }
+    function maybeResume() {
+      try {
+        if (!mrSearchPause.pausedByUs) return;
+        var area2 = document.getElementById('search-area');
+        var input = document.getElementById('search-input');
+        var busy = area2 && area2.classList.contains('has-results');
+        var hasText = !!(input && String(input.value || '').trim());
+        if (busy || hasText) return;                 /* 有结果/有输入就不恢复，避免边搜边播 */
+        var ae = document.activeElement;
+        var area3 = document.getElementById('search-area');
+        if (ae && area3 && area3.contains(ae)) return;   /* 焦点还在搜索区，保持暂停（语音输入需要在暂停态） */
+        mrSearchPause.pausedByUs = false;
+        var a = window.audio;
+        if (a && a.paused && mrSearchPause.wasPlaying) {
+          mrSearchPause.wasPlaying = false;
+          try { if (typeof window.togglePlay === 'function') window.togglePlay(); else a.play().catch(function () { }); } catch (e) { }
+        }
+      } catch (e) { }
+    }
+    /* 用 document 级捕获：搜索框/搜索区被宿主重建也能命中 */
+    document.addEventListener('focusin', function (ev) {
+      var t = ev.target;
+      if (t && t.closest && t.closest('#search-area')) pauseForSearch();
+    }, true);
+    document.addEventListener('focusout', function (ev) {
+      var t = ev.target;
+      if (!t || !t.closest || !t.closest('#search-area')) return;
+      if (mrSearchPause.resumeTimer) window.clearTimeout(mrSearchPause.resumeTimer);
+      mrSearchPause.resumeTimer = window.setTimeout(function () { mrSearchPause.resumeTimer = 0; maybeResume(); }, 700);
+    }, true);
+    return true;
+  }
+
   function startWatchdog() {
     if (window.__mrWatchdog) return;
     window.__mrWatchdog = 1;
@@ -1378,6 +1531,9 @@
       try { panelKbFit(); } catch (e) { }           /* DIY 面板没开时立即返回 */
       if (WATCH_TICK % 4 === 0) {
         try { if (document.getElementById('hotkey-settings-btn') || document.getElementById('hotkey-modal')) mrRemoveHotkeyUi(); } catch (e) { }
+        try { patchHomeQuickCards(); } catch (e) { }
+        try { patchImportMenuButton(); } catch (e) { }
+        try { patchSearchPauseForVoice(); } catch (e) { }
         try { patchPlatformPanelAnimation(); } catch (e) { }
         try { patchHomeBlankDismiss(); } catch (e) { }
         /* 2.0s：吸顶变量 / 补丁自愈（宿主换 fetch、重建面板时才需要重装） */
@@ -3232,6 +3388,16 @@
     try { patchProgressiveSearch(); } catch (e) { }
     try { patchLikeStatusSync(); } catch (e) { }
     try { patchHotkeyRemoval(); } catch (e) { }
+    try { patchUiHideControls(); } catch (e) { }
+    try { patchHomeQuickCards(); } catch (e) { }
+    try { patchImportMenuButton(); } catch (e) { }
+    try { patchSearchPauseForVoice(); } catch (e) { }
+    try { window.setTimeout(function () {
+      try { patchUiHideControls(); } catch (e) { }
+      try { patchHomeQuickCards(); } catch (e) { }
+      try { patchImportMenuButton(); } catch (e) { }
+      try { patchSearchPauseForVoice(); } catch (e) { }
+    }, 2500); } catch (e) { }
     try { patchPlatformPanelAnimation(); } catch (e) { }
     try { patchHomeBlankDismiss(); } catch (e) { }
     try { window.setTimeout(function () { try { patchHotkeyRemoval(); } catch (e) { } try { patchPlatformPanelAnimation(); } catch (e) { } try { patchHomeBlankDismiss(); } catch (e) { } }, 2000); } catch (e) { }

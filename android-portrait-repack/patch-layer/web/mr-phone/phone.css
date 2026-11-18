@@ -2569,3 +2569,106 @@ body.phone-shell #home-platform-recommend-mask.show.mr-panel-closing{
 body.phone-shell #home-platform-recommend-mask.show.mr-panel-closing .home-platform-recommend-modal{
   animation: mrPanelSheetOut .17s ease-in both!important;
 }
+
+/* ===== v97：首页快捷卡恢复 / 隐藏UI·全沉浸 / 恢复按钮 ===== */
+/* 首页三张快捷卡：手机上一行三列小卡 */
+body.phone-shell #empty-home .home-grid.home-quick-grid{
+  order: 2!important;
+  display: grid!important;
+  grid-template-columns: repeat(3, minmax(0, 1fr))!important;
+  gap: 8px!important;
+  margin: 10px 0 2px!important;
+  padding: 0!important;
+}
+body.phone-shell #empty-home .home-grid.home-quick-grid > .home-card-featured{
+  display: none!important;
+}
+body.phone-shell #empty-home .home-grid.home-quick-grid > .home-card-quick{
+  display: flex!important;
+  flex-direction: column!important;
+  justify-content: flex-start!important;
+  gap: 3px!important;
+  min-height: 108px!important;
+  padding: 12px 12px 10px!important;
+  border-radius: 16px!important;
+  border: 1px solid rgba(255,255,255,.075)!important;
+  background: rgba(12,16,20,.62)!important;
+  -webkit-backdrop-filter: blur(16px) saturate(140%)!important;
+  backdrop-filter: blur(16px) saturate(140%)!important;
+  text-align: left!important;
+  overflow: hidden!important;
+}
+body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-label{
+  font-size: 8.5px!important; letter-spacing: .12em!important; color: rgba(0,245,212,.85)!important;
+}
+body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-title{
+  font-size: 14.5px!important; font-weight: 760!important; color: #f8f4ee!important;
+  white-space: nowrap!important; overflow: hidden!important; text-overflow: ellipsis!important;
+}
+body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-sub{
+  font-size: 9.5px!important; line-height: 1.35!important; color: rgba(248,244,238,.45)!important;
+  display: -webkit-box!important; -webkit-line-clamp: 2!important; -webkit-box-orient: vertical!important; overflow: hidden!important;
+}
+body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-art{ display: none!important; }
+
+/* 隐藏UI：只藏界面，保留舞台/歌词 */
+body.phone-shell.mr-ui-hidden #phone-chrome-slot,
+body.phone-shell.mr-ui-hidden #search-area,
+body.phone-shell.mr-ui-hidden #fx-fab,
+body.phone-shell.mr-ui-hidden #bottom-bar,
+body.phone-shell.mr-ui-hidden #playlist-panel,
+body.phone-shell.mr-ui-hidden #search-results{
+  opacity: 0!important;
+  pointer-events: none!important;
+  transform: translateY(12px)!important;
+  transition: opacity .22s ease, transform .22s ease!important;
+}
+/* 全沉浸：界面全藏（含顶部歌条/舞台图标） */
+body.phone-shell.mr-immersive #phone-chrome-slot,
+body.phone-shell.mr-immersive #search-area,
+body.phone-shell.mr-immersive #fx-fab,
+body.phone-shell.mr-immersive #bottom-bar,
+body.phone-shell.mr-immersive #playlist-panel,
+body.phone-shell.mr-immersive #search-results,
+body.phone-shell.mr-immersive #top-right,
+body.phone-shell.mr-immersive #thumb-wrap,
+body.phone-shell.mr-immersive #empty-home{
+  opacity: 0!important;
+  pointer-events: none!important;
+  transition: opacity .24s ease!important;
+}
+/* 恢复按钮 */
+#mr-ui-restore{
+  position: fixed!important;
+  left: 50%!important;
+  transform: translateX(-50%)!important;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px))!important;
+  z-index: 9700!important;
+  display: none;
+  padding: 7px 16px!important;
+  border-radius: 999px!important;
+  border: 1px solid rgba(255,255,255,.14)!important;
+  background: rgba(10,14,18,.72)!important;
+  -webkit-backdrop-filter: blur(18px)!important;
+  backdrop-filter: blur(18px)!important;
+  color: rgba(248,244,238,.88)!important;
+  font-size: 11px!important;
+  letter-spacing: .04em!important;
+}
+body.phone-shell.mr-ui-hidden #mr-ui-restore,
+body.phone-shell.mr-immersive #mr-ui-restore{ display: block!important; }
+
+/* 快捷卡：标题/副标题占满整宽（宿主给桌面竖排预留的 max-width 在手机上会截成单字） */
+body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-quick .home-card-title,
+body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-quick .home-card-sub,
+body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-quick .home-card-label{
+  max-width: 100%!important;
+}
+body.phone-shell #empty-home .home-grid.home-quick-grid .home-card-quick .home-card-title{
+  white-space: normal!important;
+  overflow: hidden!important;
+  text-overflow: clip!important;
+  display: -webkit-box!important;
+  -webkit-line-clamp: 2!important;
+  -webkit-box-orient: vertical!important;
+}
