@@ -176,13 +176,11 @@
     if (open) {
       panel.classList.add('peek');
       try { panel.style.setProperty('display', 'block', 'important'); } catch (e) { }
-      try { if (typeof setPeek === 'function') setPeek(panel, true, 'fx'); } catch (e) { }
       var fab = document.getElementById('fx-fab');
       if (fab) fab.classList.add('active');
     } else {
       panel.classList.remove('show', 'peek', 'pinned');
       try { panel.style.setProperty('display', 'none', 'important'); } catch (e) { }
-      try { if (typeof setPeek === 'function') setPeek(panel, false, 'fx'); } catch (e) { }
       var fab2 = document.getElementById('fx-fab');
       if (fab2) fab2.classList.remove('active');
     }
