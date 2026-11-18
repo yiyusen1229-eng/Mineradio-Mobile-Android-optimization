@@ -64,6 +64,88 @@
     '</div>'
   ].join('');
 
+  /* ===== v84：localStorage 配额保护（修「主页 MP4 保存失败」）=====
+     宿主把网络缓存都放 localStorage：实测 5.24MB 上限里 mr-api-cache 就占 3.97MB。
+     选 MP4 时视频 blob 已经写进 IndexedDB，但紧随其后写几百字节的 meta 反而失败（QuotaExceeded），
+     宿主 catch 后提示「主页 MP4 保存失败」。
+     处理：① 启动 / 配额报错时清掉纯网络缓存；② setItem 先清缓存再重试；③ 仍失败落内存兜底，getItem 能读回。 */
+  var MR_LS_PRUNE_KEYS = /^(mr-api-cache:|mr-bridge-cache:|mr_chrome_storage__beatmap:)/;
+  var mrLsFallback = Object.create(null);
+
+  function mrLsTotalSize() {
+    var total = 0;
+    try {
+      for (var i = 0; i < localStorage.length; i += 1) {
+        var k = localStorage.key(i);
+        if (!k) continue;
+        total += k.length + (localStorage.getItem(k) || '').length;
+      }
+    } catch (e) { return 0; }
+    return total;
+  }
+
+  function mrPruneLocalStorageCaches(force) {
+    var removed = 0;
+    try {
+      var total = mrLsTotalSize();
+      if (!force && total < 3.6 * 1024 * 1024) return 0;
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i += 1) { var k = localStorage.key(i); if (k) keys.push(k); }
+      for (var j = 0; j < keys.length; j += 1) {
+        if (!MR_LS_PRUNE_KEYS.test(keys[j])) continue;
+        try { localStorage.removeItem(keys[j]); removed += 1; } catch (e) { }
+      }
+      if (removed) {
+        try { window.__mrLsPruned = (window.__mrLsPruned || 0) + removed; } catch (e) { }
+      }
+    } catch (e) { }
+    return removed;
+  }
+
+  function installLocalStorageGuard() {
+    if (window.__mrLsGuard) return;
+    window.__mrLsGuard = 1;
+    try {
+      var proto = window.Storage && Storage.prototype;
+      if (!proto || !proto.setItem) return;
+      var rawSet = proto.setItem;
+      var rawGet = proto.getItem;
+      var rawRemove = proto.removeItem;
+      proto.setItem = function (key, value) {
+        try {
+          return rawSet.call(this, key, value);
+        } catch (error) {
+          var quota = error && /quota/i.test(((error.name || "") + " " + (error.message || "")));
+          if (!quota) throw error;
+          mrPruneLocalStorageCaches(true);
+          try {
+            return rawSet.call(this, key, value);
+          } catch (again) {
+            mrLsFallback[String(key)] = String(value);
+            return undefined;
+          }
+        }
+      };
+      proto.getItem = function (key) {
+        var value = rawGet.call(this, key);
+        if (value === null) {
+          var fallbackKey = String(key);
+          if (Object.prototype.hasOwnProperty.call(mrLsFallback, fallbackKey)) return mrLsFallback[fallbackKey];
+        }
+        return value;
+      };
+      proto.removeItem = function (key) {
+        try { delete mrLsFallback[String(key)]; } catch (e) { }
+        return rawRemove.call(this, key);
+      };
+    } catch (e) { }
+  }
+
+  function mrLocalStorageBoot() {
+    installLocalStorageGuard();
+    try { mrPruneLocalStorageCaches(false); } catch (e) { }
+  }
+
   function ready(fn) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true });
     else fn();
@@ -1880,6 +1962,7 @@
   ready(function () {
     window.__mrStructDirty = 1;
     ensureClasses();
+    mrLocalStorageBoot();
     buildChrome();
     initDiyConsole();
     startStructureObserver();

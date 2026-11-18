@@ -231,3 +231,46 @@ v82 只保留 ghost 的隐藏，恢复两个视频按钮，并按手机排版（
 - 起飞方向（首页→播放页）同样补宽高插值（350→316）。
 
 逐帧验证（CDP screencast + 每帧量 rect）：宽度 316→350 连续无跳、底栏恒 138、飞行帧不透明；回归 23/23 PASS。
+---
+
+## 13. v84：主页 MP4 保存失败（localStorage 配额）+ 落位封面/背景闪
+
+### 13.1 「主页 MP4 保存失败」
+复现方式：直接在页面里用合成 File 调宿主 `handleHomeDashboardVideoFile(file)`（跳过系统选择器），捕获 console.warn：
+
+```
+[HomeDashboardVideoSave] QuotaExceededError: Failed to execute 'setItem' on 'Storage':
+Setting the value of 'mineradio-home-dashboard-video-meta-v1' exceeded the quota.
+```
+
+宿主流程图：校验 .mp4 / ≤300MB → `homeDashboardPutVideoBlob()` 写 **IndexedDB**（成功）→ `localStorage.setItem(meta)`（**失败**）→ catch 里提示「主页 MP4 保存失败」。
+
+根因：localStorage 已经吃满 5.24MB（浏览器上限 5MB 左右），其中：
+- `mr-api-cache:*` ≈ **3.97MB**
+- `mr_chrome_storage__beatmap:*` ≈ 0.80MB
+- `mr-bridge-cache:*` ≈ 0.34MB
+
+这些全是可再生的网络缓存，meta 只有几百字节却写不进去。
+
+修法（patch 层，不动宿主）：
+1. `--mr-sys-bottom` 同级思路新增 localStorage 保护：启动时若用量 > 3.6MB，删除前缀为 `mr-api-cache:` / `mr-bridge-cache:` / `mr_chrome_storage__beatmap:` 的 key；
+2. 包裹 `Storage.prototype.setItem`：遇到 quota 错误先清缓存再重试；仍失败则写入内存兜底表，`getItem` 能读回（本次会话功能不受影响）；`removeItem` 同步清兜底。
+
+实测：启动清理 **3774 个 key，5.24MB → 135KB**；再走 `handleHomeDashboardVideoFile` → toast「主页 MP4 已保存」，meta 落库，按钮从「选择 MP4」变「更换 MP4」。
+
+### 13.2 返回首页时封面缩一下 / 信息条闪一下
+逐帧（rAF 60fps）量几何：
+- 播放页顶部条：行高 47、封面 **47×47**（`width:var(--mr-row-h)`，本机 `5.4vh≈47px`）
+- 首页底栏：行高 47、封面 **44×44**（基础规则写死 44px）
+→ 落位换 DOM 的同一帧封面缩 3px（用户说的「封面缩小闪一下」）。
+
+另外飞行时行的背景由 `.mr-top-track::before` 渐变提供，落位去掉 class 后渐变**瞬间**消失 → 亮度硬切（「信息条闪一下」）。
+
+修法：
+- 底栏封面也改成 `var(--mr-row-h, 44px)`（两边同源，实测 47↔47 连续）；
+- 给底栏里的行补一条同款 `::before`（默认 `opacity:0` + `transition:opacity .2s`），落位去掉 `mr-track-bg-on` 后渐变淡出。
+
+验证：`return-capture` 逐帧 + DOM 采样 → 行元素未被替换（marker 一致）、封面尺寸全程 47、行位置从 (12,54) 平滑到 (21,712)、底栏恒高 138、无空白帧；回归 23/23 PASS、自适应矩阵无溢出。
+
+### 13.3 还没完全确认的一点
+「信息条消失」如果指的是**飞行途中底栏那行是空的**（行在顶部，正往底栏飞，约 400ms），这是当前 FLIP 设计本身；需要改成「底栏留占位/交叉淡入」才能消掉。等确认是这种观感再动，避免又改出别的问题。
