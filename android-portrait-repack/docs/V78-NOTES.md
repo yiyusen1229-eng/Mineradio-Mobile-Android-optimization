@@ -404,3 +404,18 @@ WebView 里跑一套 JS「平台适配层」（`js/ported/ref` 网易云、`kugo
 - 真正的首屏提速要改宿主：搜索改成「谁先回来先渲染」的渐进式（或把 `Promise.allSettled` 改成带预算的 `Promise.race` 逐平台刷新）；
 - 后台预热 status 实测反而挤占原生桥队列（FoliaBridge 请求像串行排队），会把第一次搜索挤到超时 → 已关闭；
 - 跨境 RTT 是物理成本，无法在 App 内消除。
+---
+
+## 18. v89：当前队列面板滑动闪烁
+
+v87 只处理了「我的歌单」列表（`renderUserPlaylistsList`）。「当前队列」是另一套：
+`renderQueuePanel()` 里用 `queuePanelVirtualWindow()` 算窗口，`scheduleQueuePanelVirtualRender()` 在每次
+scroll（rAF 节流）里重新执行 `$ql.innerHTML = ...` → 所有 `.queue-item` + 封面 `<img>` 每帧重建，同样一直闪。
+
+修法（同一套「全量渲染 + 滚动不重建」）：
+- 包装 `renderQueuePanel`：渲染期间置 `__mrQueueRendering`；
+- 包装 `queuePanelVirtualWindow`：`__mrQueueRendering` 时返回 `{start:0, end:total, top:0, bottom:0}` → 队列全量渲染；
+- 包装 `scheduleQueuePanelVirtualRender`：`__mrQueueFull` 时直接返回 → 滚动不触发重建。
+
+验证：当前队列 44 条，连续滚动 25 帧，`MutationObserver` 记录 **0 次 DOM 变更**（此前每帧重建）；面板吸顶头正常，
+条目、封面、喜欢/下移/收藏/移除按钮都在；回归 23/23 PASS。

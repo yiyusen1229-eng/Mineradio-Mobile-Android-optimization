@@ -196,6 +196,39 @@
       if (window.__mrPlFullMode) return;
       return rawSchedule.apply(this, arguments);
     };
+
+    /* v89：当前队列面板同样是「每帧重建 #queue-list.innerHTML」→ 滑动一直闪。
+       一并改成全量渲染 + 滚动不重建。 */
+    if (!window.__mrQueueFullInstalled && typeof window.renderQueuePanel === 'function') {
+      window.__mrQueueFullInstalled = 1;
+      window.__mrQueueFull = 1;
+      var rawQueueRender = window.renderQueuePanel;
+      var rawQueueWin = window.queuePanelVirtualWindow;
+      var rawQueueSched = window.scheduleQueuePanelVirtualRender;
+      if (typeof rawQueueWin === 'function') {
+        window.queuePanelVirtualWindow = function (scroller, panelScroller, total) {
+          if (window.__mrQueueRendering) {
+            var n = Math.max(0, Number(total) || 0);
+            return { start: 0, end: n, top: 0, bottom: 0 };
+          }
+          return rawQueueWin.apply(this, arguments);
+        };
+      }
+      window.renderQueuePanel = function () {
+        window.__mrQueueRendering = 1;
+        try {
+          return rawQueueRender.apply(this, arguments);
+        } finally {
+          window.__mrQueueRendering = 0;
+        }
+      };
+      if (typeof rawQueueSched === 'function') {
+        window.scheduleQueuePanelVirtualRender = function () {
+          if (window.__mrQueueFull) return;
+          return rawQueueSched.apply(this, arguments);
+        };
+      }
+    }
     return true;
   }
 
