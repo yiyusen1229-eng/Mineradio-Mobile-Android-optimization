@@ -35,11 +35,12 @@ Mineradio 竖屏重打包的关键迭代记录。详细版见 `docs/V*-NOTES.md`
 | v67–v69 | 只适配过 390×844，小屏/大屏/横屏/平板会破版（底栏固定 132px、固定 64px 右侧列、面板 150px 死值） | 响应式变量（`--mr-row-h`/`--mr-ctrl-size`/`--mr-bar-pad-x`/`--mr-transport-gap` 用 clamp）+ ≤360/≥600/横屏断点 + safe-area 左右 + hideFab 去 inline 死值 + 浮层按 `--mr-bar-h` 定位；用 CDP `Emulation` 在真机 WebView 上跑 10 组视口矩阵（320~800 宽、横竖屏）全部无溢出/底栏完整 |
 | v70–v76 | DIY 依赖「DIY 玩家模式」开关（显示已切回简约模式才能开、开模式反而开不了；返回键关面板还会退模式）；面板不是从 DIY 键弹出；菜单里的 DIY 模式入口多余；DIY 图标不对；舞台左半边点击仍有响应；搜索起播后浮层挡着像卡死 | DIY 键=视觉控制台直开直关（去掉玩家模式概念与菜单入口）、面板从 DIY 位置弹出并按手机尺寸自适应、图标换回原包滑块 SVG、z-index 提到面板之上再点可收回、面板自持开态（宿主 auto-hide 不再自动收起）；舞台 click/dblclick/mouseup/contextmenu 在捕获阶段全屏蔽（保留拖拽旋转）；起播进播放页前先收搜索/歌单/控制台浮层，返回键顺序改为「浮层优先」 |
 | v77 | ① 播放页点左半边仍会「弹出歌单」（v76 只拦了 click/dblclick，真正来源是宿主 `window` 捕获阶段的 `touchstart`：左缘 104px 内一点就 `setPeek(playlist-panel,true,'pl')`，还有合成 mousemove 走桌面 hover 判定）；② v76 顺手把「双击回正」也拦掉了；③ DIY 视觉控制台压到底栏（宿主旧规则 `#fx-panel.peek{bottom:120px;max-height:100vh-240px}` 特异性压过 V70 的 `#fx-panel`），位置/尺寸也不对；④ 播放页（`body.immersive-mode`）宿主把 `#fx-fab` 钉成 `pointer-events:none`、`#fx-panel` 钉 `visibility:hidden`，点 DIY 完全没反应；⑤ 点 DIY 有时开不了（宿主 auto-peek 会乱加 `.peek`，旧逻辑拿宿主 class 判断开合） | ① 舞台覆盖层 `touchstart` 改非 passive 并 `preventDefault()`：WebView 不再合成 mousedown/mousemove/mouseup/click，宿主点击/悬停链路全部静默（touch/pointer 照常，拖拽旋转不受影响）；同时包裹 `isPlaylistEdgeTrigger` 在播放页返回 false。② 手机层自己识别双击（340ms 内两次轻点、位移<10px）→ 调宿主 `recenterCamera()`，`dblclick` 不再屏蔽。③ 面板几何改挂在手机层自持的 `body.mr-diy-open` 上：`right:12px` + `width:min(80vw,460px)` + `top:31vh` + `bottom:底栏上沿-14px`（391×870 实测 66.4/269.9/379.8/710.7，绿框目标 65/269/379/711），标签栏 6 项等分收缩、副标题允许折行。④ `hideFab()` 内联 `pointer-events:auto!important`，开态内联 `visibility/opacity/pointer-events`。⑤ 开合只认 `window.__mrDiyOpen`（+`body.mr-diy-open`），不再读宿主 class |
+| v78 | ① 打开 DIY 面板「闪一下」（关态 `display:none` → 开态内联 `!important display:block/opacity:1`，display 切换不触发 transition → 面板第一帧满不透明硬切，WebView 还会先上低分辨率栅格）；② patch-layer 经 v10→v77 多轮「文件末尾追加」叠出大量被完全覆盖的重复 CSS 与死代码（`phone.css` 2978 行里 717 行可整块删）；③ mr-phone.js 有 2 个 0 调用死函数、2 个恒空转补丁、5 组定时器 + 46 处监听、音量/词两个逐行重复的弹层实现；④ APK 里残留官方桌面版的未引用素材（含 5.85 MB 疑似死模型 `hand_landmarker.task`） | ① 关态不再切 display：常驻 `display:block`，用 `opacity/visibility/pointer-events` + 与开态同 top/bottom/height 的盒子，`transition` 实现 160~180ms 淡入+10px 上移（transition 优先级高于 !important，能盖过终态声明）；JS 不再写内联 opacity/visibility。screencast 逐帧验证无硬切、无糊帧。② 按审计删 717 行 / 24.6 KB（−22%）：重复块 + 被后续同选择器覆盖的旧规则 + 整段无 JS 使用的 `.phone-landscape` @media；保留 V62 转场/V77 几何/安全区/断点。③ 删死函数与空转补丁；4 个常驻 interval + 1 个按需轮询 → 单个 500ms 调度器（唤醒 3.6→2 次/s）；`hideFab` 的 2.5s `getBoundingClientRect`+CSS 变量写 → ResizeObserver；`ensureStructure` 改 MutationObserver 置脏触发；`styleLoginModal` 改打开时写一次；音量/词弹层合并为 `bindPlayerPopovers`；文件头加模块地图分区。④ 新增 `assets-skip-list.json`（42 条 A 级零引用素材）+ `repack_assets.py` 支持裁剪：APK 82,972,716 → 75,910,975 B（−7.06 MB / −8.5%）。真机回归 23/23 PASS、0 异常、0 404；详见 `docs/V78-NOTES.md` |
 
 ## 经验 / 坑
 
 - **不要 zip 替换 assets**：会破坏 dex/FileProvider，必须完整 apktool 回编译。
-- **不要用 MutationObserver 监听宿主 class**：宿主每帧改 class 会造成死循环（曾 109% CPU）。用 2s 轮询。
+- **不要用 MutationObserver 监听宿主 class**：宿主每帧改 class 会造成死循环（曾 109% CPU）。**但 `childList` 监听 `#controls/#bottom-bar` 子节点重建是安全且推荐的**（v78 用它把 `ensureStructure` 从轮询改成事件驱动）。
 - **宿主对 `#bottom-bar` 有多层渐变规则**：CSS !important 会被覆盖，需内联样式强制。
 - **转场动画与宿主状态要错开**：`setImmersiveMode` 会瞬改底栏，动画必须放在它之前，否则动画被掐断。
 - **Android WebView 的 backdrop-filter 很贵**：尤其叠加动态 3D canvas 时，必须去掉。
@@ -48,6 +49,9 @@ Mineradio 竖屏重打包的关键迭代记录。详细版见 `docs/V*-NOTES.md`
 - **v77 坑：宿主 DOM 状态不能当作手机层的「开/关」判断**。`#fx-panel` 的 `.peek/.show` 会被宿主 hover/auto-peek 随时加减（合成 mousemove 在 DIY 键位置就会触发 `setPeek(fp,true,'fx')`），用 class 判断会得到「刚打开就以为开着」→ 再点变成关闭。开合只认 `window.__mrDiyOpen`，几何/可见性挂在 `body.mr-diy-open` 上。
 - **v77 坑：`body.immersive-mode` 会钉死 DIY 相关元素**：`#fx-fab{pointer-events:none}`、`#fx-panel{opacity:0;visibility:hidden;pointer-events:none}`，且都是 `!important`。手机层必须用**内联 important** 才能覆盖（`hideFab()` 补 `pointer-events:auto`；开面板时补 `visibility/opacity/pointer-events`）。
 - **v77 坑：CSS 特异性**：`body.phone-shell #fx-panel.peek`（1 id + 2 class）比 `body.phone-shell #fx-panel`（1 id + 1 class）高一档，旧规则会把 V70 的位置/最大高改回去（表现为面板 120px 贴底、压住底栏）。改面板几何必须用平级或更高的选择器。
+- **v78 坑：`display:none` ↔ `block` 不会触发 CSS transition**。想在 WebView 上做「不闪」的开场，必须让元素常驻 `display:block`，只在 opacity/transform/visibility 上过渡；且过渡期间不要用内联 `!important` 写终态（transition 的级联优先级最高，内联 important 会把过渡变成硬切）。panel 的盒子（top/bottom/height）关态/开态要一致，否则会有一帧布局跳变。
+- **v78 坑：CSS 会「版本叠加」**。phone.css 是 v10→v77 不断在文件末尾追加形成的，22% 的行是被后续同选择器规则完全覆盖的死规则（还有 v46 合并三份 mobile CSS 留下的整段同源重复）。用「选择器 + 声明是否被后续精确覆盖」做保守审计后可以整块删；删前先 `git status`、删后跑 10 组视口矩阵 + 面板矩阵。
+- **v78 坑：APK 体积要按「压缩后」算账**。repack 用 `compresslevel=6` 重压全包，原始大小的 1.5 MB 可能压缩后只有 300 KB；真正大头是 `assets/materials`(33.7%)、`assets/fonts`(20.3%)、`lib/`(14.5%)，web 素材只占 14.1%。裁剪实现放在 `assets-skip-list.json` + `repack_assets.py`（build.ps1 五步不变，日志打印 `trimmed=` 并断言 0 残留）。
 
 ## 未完成 / 可继续
 
@@ -55,5 +59,6 @@ Mineradio 竖屏重打包的关键迭代记录。详细版见 `docs/V*-NOTES.md`
 2. **字号下限**：仍有约 58 个 <10px 的小标签（KG、卡片副标题等），建议用 `--mr-font-xs` 系列统一 clamp 到 12px 下限。
 3. **软键盘**：弹层按窗口高定位，未监听 `visualViewport.resize`，键盘弹起时极端情况可能被遮挡。
 4. **720px 以上宽度**：宿主自身的桌面布局规则（`min-width:721px`）与手机层硬覆盖并存；本版靠底栏/面板变量化保证可用，平板专属首页两栏仍是宿主桌面几何，若要"平板原生感"需单独设计。
-5. **横屏**：手机层有一整套 `.phone-landscape` 规则但**没有任何 JS 添加该 class**（死代码），当前横屏走新加的 `orientation:landscape` 查询；若要完整横屏布局，可把 1915–2229 的 class 门换成真查询。
+5. **横屏**：手机层那套 `.phone-landscape` 规则已在 v78 整块删除（无 JS 添加该 class，属死代码），当前横屏走 `orientation:landscape` 查询；若要完整横屏布局，需要新写一套基于真查询的规则。
 6. 3D 粒子在 WebView 上仍可能掉帧，可加「性能模式」开关（降粒子/关后效）。
+7. **再压体积（v78 审计结论）**：`assets/materials` 28 MB 需要「内置场景/Particle 预设 → 材质」映射才能判定哪些 `.tex` 未被引用；`folia-visualizer` 的预设图 WebP 化约可再省 2 MB；`NotoSansCJK` 子集化风险高（可能缺字），不建议盲目做。

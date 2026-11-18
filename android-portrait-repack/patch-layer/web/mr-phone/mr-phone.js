@@ -8,9 +8,25 @@
  *   4. 可选：强制自然视口（去掉桌面的「虚拟桌面缩放」时使用）
  *
  * 依赖：
- *   - mobile-shell.css / mobile-home.css / mobile-touch.css
- *     （来自 mineradio.art，GPL-3.0，需与本文件一起分发）
- *   - mr-phone-early.js（在 <head> 里先执行）
+ *   - phone.css（同目录；手机层全部样式，本文件只做行为补丁）
+ *   - 宿主全局函数一律按需探测（typeof 判断），不存在就不绑定
+ *
+ * 模块地图（单文件 IIFE，按注释横幅分区；v78 起取消多份重复实现）：
+ *   §1 启动与看门狗   ready / ensureClasses / classWatch / layoutWatch / startWatchdog /
+ *                     startStructureObserver / notifyWatch / hideFab / 菜单
+ *   §2 DIY 控制台     setDiyPanel / showDiyPanelEl / keepDiyPanelOpen / bindDiyTap / bindFab
+ *   §3 播放页舞台     bindStageDrag / bindStageGuard / recenterStageView / patchPlaylistEdgeTrigger
+ *   §4 导航入口       bindTrackEnter / enterPlayerFromHostHide / bindHostNavTriggers
+ *   §5 Chrome/视口    buildChrome / forceViewport / patchPeek
+ *   §6 转场状态机     首页⇄播放页（FLIP + 360ms 单转场，本区最敏感，勿轻改）
+ *   §7 宿主钩子       patchHostHooks（updateEmptyHomeVisibility / immersive 旁路）
+ *   §8 缓存/调优      patchApiCache / tuneAudioFade / tuneRendererOnce / patchHomeToast
+ *   §9 弹层           placePopover / hidePopover / bindPlayerPopovers
+ *   §10 通知/登录     noticeWatch / styleLoginModal
+ *   §11 底栏/UI       layoutPhoneBar / syncChromeAvatar / updatePlayerPage
+ *   §12 歌单/返回     openPlaylistPanel / enhancePlaylistPanel / closeTopOverlay / registerBackButton
+ *   §13 手势          registerPinchZoom
+ *   §14 入口/API      ready(...) / window.MrPhoneShell
  *
  * 兼容：Mineradio 桌面版前端 / 各 Android WebView 移植版的同名全局函数
  *       goHome()、onUserBtnClick() 可选；存在就接上，不存在就不绑定。
@@ -67,38 +83,64 @@
     }
   }
 
-  /* 宿主会重写 body.class；低频轮询只补类（纯 class 操作，零测量、零内联写），
-     转场期间不做任何布局动作。布局类兜底放到单独的 2.5s watchdog，且转场中直接 return。 */
-  function startClassWatch() {
-    if (window.__mrPhoneClassWatch) return;
-    window.__mrPhoneClassWatch = window.setInterval(function () {
-      try {
-        ensureClasses();
-        ensureShellState();
-        syncChromeAvatar();
-        enhancePlaylistPanel();
-        patchPeek();
-        patchHostHooks();
-        patchPlaylistEdgeTrigger();
-      } catch (e) { }
-    }, 2000);
-    startLayoutWatch();
+  /* =================================================================
+   * §1 启动与看门狗（Watchdog）
+   * ----------------------------------------------------------------
+   * v77 前这里有 4 个常驻 interval（2000/2500/1500/500ms）+ 1 个按需轮询：
+   * 空闲态 ~3.6 次唤醒/秒、~17.5 次 DOM 查询/秒、0.4 次强制布局/秒。
+   * v78 合并成单个 500ms 调度器（tick 取模分频），结构变化改事件驱动。
+   * ================================================================= */
+  var WATCH_TICK = 0;
+
+  /* 2.0s：宿主会重写 body.class；这里只补 class / 补钩子，零测量、零内联写。 */
+  function classWatch() {
+    try {
+      ensureClasses();
+      ensureShellState();
+      syncChromeAvatar();
+      enhancePlaylistPanel();
+      patchPeek();
+      patchHostHooks();
+      patchPlaylistEdgeTrigger();
+    } catch (e) { }
   }
 
-  function startLayoutWatch() {
-    if (window.__mrLayoutWatch) return;
-    window.__mrLayoutWatch = window.setInterval(function () {
-      if (isBusy()) return;         /* 转场窗口内绝不测量/重排 */
-      try {
-        ensureStructure();
-        layoutPlayerExtrasPos();
-        reorderProgressBar();
-        layoutPhoneBar();
-        styleLoginModal();
-        hideFab();
-        updateProgressTimes();
-      } catch (e) { }
-    }, 2500);
+  /* 2.5s：布局兜底；转场窗口内直接 return（绝不测量/重排）。 */
+  function layoutWatch() {
+    if (isBusy()) return;
+    try {
+      if (window.__mrStructDirty) { ensureStructure(); reorderProgressBar(); }
+      layoutPhoneBar();
+      styleLoginModal();
+      hideFab();
+      bindFab(document.getElementById('fx-fab'));
+      updateProgressTimes();
+    } catch (e) { }
+  }
+
+  function startWatchdog() {
+    if (window.__mrWatchdog) return;
+    window.__mrWatchdog = 1;
+    window.setInterval(function () {
+      WATCH_TICK++;
+      try { noticeWatch(); } catch (e) { }          /* 500ms */
+      if (WATCH_TICK % 4 === 0) classWatch();       /* 2.0s */
+      if (WATCH_TICK % 5 === 0) layoutWatch();      /* 2.5s */
+    }, 500);
+  }
+
+  /* 宿主重建 #controls / #bottom-bar 子节点时才需要重跑结构补丁（ событие 驱动） */
+  function startStructureObserver() {
+    if (window.__mrStructObserver) return;
+    window.__mrStructObserver = 1;
+    var mark = function () { window.__mrStructDirty = 1; };
+    try {
+      var mo = new MutationObserver(mark);
+      [document.getElementById('controls'), document.getElementById('bottom-bar')].forEach(function (el) {
+        if (el) mo.observe(el, { childList: true });
+      });
+    } catch (e) { }
+    mark();
   }
 
   /* 底栏可见性/控件态：手机层是唯一控制者（纯 class 操作） */
@@ -116,20 +158,47 @@
   }
 
 
-  /* 宿主会把 DIY 浮动按钮重新显示出来（会压住卡片），这里用内联 important 兜底 */
-  /* v64：DIY 不再是浮在舞台上的悬浮球，而是底栏右上角的一个按钮（首页/播放页都在这里） */
-  /* v67：DIY 只负责「显示 + 挂进底栏」，位置/尺寸全部交给 CSS 变量（自适应） */
+  /* 宿主会把 DIY 浮动按钮重新显示出来（会压住卡片），这里用内联 important 兜底。
+     v64：DIY 不再是浮在舞台上的悬浮球，而是底栏右上角的一个按钮（首页/播放页都在这里）。
+     v67：位置/尺寸全部交给 CSS 变量（自适应）。
+     v78：底栏高度改由 ResizeObserver 维护（原来每 2.5s 一次 getBoundingClientRect
+          强制布局 + 全文档 CSS 变量失效）；内联样式也只在目标值变化时写一次。 */
+  var barHLast = -1;
+  var fabStyleSig = '';
+
+  function setBarHeight(h) {
+    h = Math.round(h || 0);
+    if (!h || h === barHLast) return;
+    barHLast = h;
+    try { root.style.setProperty('--mr-bar-h', h + 'px'); } catch (e) { }
+  }
+
+  function startBarHeightWatch() {
+    if (window.__mrBarHWatch) return;
+    window.__mrBarHWatch = 1;
+    var bar = document.getElementById('bottom-bar');
+    if (!bar || typeof ResizeObserver !== 'function') return;
+    try {
+      new ResizeObserver(function () { setBarHeight(bar.getBoundingClientRect().height); }).observe(bar);
+      setBarHeight(bar.getBoundingClientRect().height);
+    } catch (e) { }
+  }
+
   function hideFab() {
     var f = document.getElementById('fx-fab');
     if (!f) return;
     if (document.body.classList.contains('splash-active')) {
       try { f.style.setProperty('display', 'none', 'important'); } catch (e) { }
+      fabStyleSig = '';
       return;
     }
     var bar = document.getElementById('bottom-bar');
     if (!bar) return;
     if (f.parentElement !== bar) { try { bar.appendChild(f); } catch (e) { } }
-    try { document.documentElement.style.setProperty('--mr-bar-h', Math.round(bar.getBoundingClientRect().height) + 'px'); } catch (e) { }
+    if (barHLast < 0) setBarHeight(bar.getBoundingClientRect().height);
+    /* 目标样式串：不变就完全不碰 style（避免每次 tick 触发样式重算） */
+    if (fabStyleSig === 'flex|visible|1|auto|absolute|6|0') return;
+    fabStyleSig = 'flex|visible|1|auto|absolute|6|0';
     var S = function (k, v) { try { f.style.setProperty(k, v, 'important'); } catch (e) { } };
     S('display', 'flex');
     S('visibility', 'visible');
@@ -186,39 +255,32 @@
     showDiyPanelEl(panel);
   }
 
-  /* v77：播放页是 body.immersive-mode，宿主会写 #fx-panel{opacity:0;visibility:hidden;
-     pointer-events:none}；手机上「视觉控制台」必须能开，所以开态几何/可见性全部内联 important。 */
+  /* v78：开态可见性交给 CSS（body.mr-diy-open），这里只兜底 display。
+     不要内联 opacity/visibility/pointer-events！CSS transition 的优先级虽高于 !important，
+     但内联 !important 的直接跳变会让面板「硬切」出现 —— WebView 上表现为闪一下。 */
   function showDiyPanelEl(panel) {
     if (!panel) return;
-    try {
-      panel.style.setProperty('display', 'block', 'important');
-      panel.style.setProperty('visibility', 'visible', 'important');
-      panel.style.setProperty('opacity', '1', 'important');
-      panel.style.setProperty('pointer-events', 'auto', 'important');
-    } catch (e) { }
+    try { panel.style.setProperty('display', 'block', 'important'); } catch (e) { }
   }
 
   function setDiyPanel(open) {
     var panel = document.getElementById('fx-panel');
     if (!panel) return;
     window.__mrDiyOpen = !!open;
-    if (window.__mrDiyKeepTimer) { try { clearInterval(window.__mrDiyKeepTimer); } catch (e) { } window.__mrDiyKeepTimer = 0; }
+    if (window.__mrDiyKeepTimer) { try { clearTimeout(window.__mrDiyKeepTimer); } catch (e) { } window.__mrDiyKeepTimer = 0; }
+    try { panel.classList.remove('closing'); } catch (e) { }
+    showDiyPanelEl(panel);
     if (open) {
-      window.__mrDiyKeepTimer = window.setInterval(keepDiyPanelOpen, 250);
+      /* v78：不再 250ms 轮询补 class（宿主不会删我们的 body class）。
+         只在 500ms 后做一次复查，兜住宿主在开场瞬间的 auto-hide/auto-peek。 */
       try { bodyEl().classList.add('mr-diy-open'); } catch (e) { }
       panel.classList.add('peek');
-      showDiyPanelEl(panel);
       var fab = document.getElementById('fx-fab');
       if (fab) fab.classList.add('active');
+      window.__mrDiyKeepTimer = window.setTimeout(keepDiyPanelOpen, 500);
     } else {
       try { bodyEl().classList.remove('mr-diy-open'); } catch (e) { }
       panel.classList.remove('show', 'peek', 'pinned');
-      try {
-        panel.style.setProperty('display', 'none', 'important');
-        panel.style.setProperty('pointer-events', 'none', 'important');
-        panel.style.removeProperty('visibility');
-        panel.style.removeProperty('opacity');
-      } catch (e) { }
       var fab2 = document.getElementById('fx-fab');
       if (fab2) fab2.classList.remove('active');
     }
@@ -243,32 +305,32 @@
     }
   }
 
+  /* DIY 键点击：宿主在 touchstart/pointerdown 上可能 preventDefault 导致 click 不产生，
+     所以挂 pointerup + click 两路（450ms 去重）。宿主自带的开合逻辑抢不到我们的状态：
+     开合只认 __mrDiyOpen，样式挂在 body.mr-diy-open 上。 */
+  var fabToggleAt = 0;
+  function toggleFromFab(ev) {
+    var now = Date.now();
+    if (now - fabToggleAt < 450) return;
+    fabToggleAt = now;
+    if (ev) { try { ev.stopPropagation(); ev.preventDefault(); } catch (e) { } }
+    setDiyPanel(!window.__mrDiyOpen);
+  }
+
+  function bindFab(el) {
+    if (!el || el.__mrDiyBound) return;
+    el.__mrDiyBound = 1;
+    ['pointerup', 'click'].forEach(function (t) {
+      el.addEventListener(t, function (ev) { toggleFromFab(ev); }, { passive: false });
+    });
+  }
+
+  /* ---- §2 DIY 视觉控制台开关 ---- */
   function bindDiyTap() {
     if (window.__mrDiyTap) return;
     window.__mrDiyTap = 1;
-    var lastAt = 0;
-    function toggleFromFab(ev) {
-      var now = Date.now();
-      if (now - lastAt < 450) return;
-      lastAt = now;
-      if (ev) { try { ev.stopPropagation(); ev.preventDefault(); } catch (e) { } }
-      setDiyPanel(!window.__mrDiyOpen);
-    }
-    /* 宿主在 touchstart/pointerdown 上可能 preventDefault，导致 click 不产生；
-       所以直接在 DIY 元素上挂 pointerup / touchend / click 三保险（带 450ms 去重）。 */
-    function bindFab(el) {
-      if (!el || el.__mrDiyBound) return;
-      el.__mrDiyBound = 1;
-      ['pointerup', 'mouseup', 'touchend', 'click'].forEach(function (t) {
-        el.addEventListener(t, function (ev) {
-          if (ev.type === 'touchend' && ev.touches && ev.touches.length) return;
-          toggleFromFab(ev);
-        }, { passive: false });
-      });
-    }
     bindFab(document.getElementById('fx-fab'));
-    window.setInterval(function () { bindFab(document.getElementById('fx-fab')); }, 1500);
-    /* 点面板外：只关面板 */
+    /* 点面板外：只关面板（不碰任何模式） */
     document.addEventListener('pointerdown', function (ev) {
       if (!diyPanelOpen()) return;
       if (ev.target.closest && ev.target.closest('#fx-panel')) return;
@@ -407,16 +469,16 @@
     return true;
   }
 
+  var trackEnterBarEl = null;
   function bindTrackEnter() {
     if (window.__mrTrackEnterBound) return;
     window.__mrTrackEnterBound = 1;
     document.addEventListener('click', function (ev) {
-      var bar = document.getElementById('bottom-bar');
+      var bar = trackEnterBarEl || (trackEnterBarEl = document.getElementById('bottom-bar'));
       if (!bar || !bar.contains(ev.target)) return;
       if (pageState !== 'home' || isBusy()) return;
-      var home = document.getElementById('empty-home');
-      var homeActive = home && parseFloat(getComputedStyle(home).opacity) > 0.35;
-      if (!homeActive) return;
+      /* 首页稳定显示（有 class）才有「点歌曲行进播放页」语义；原来每次点都读 opacity 强制样式 */
+      if (!document.body.classList.contains('empty-home-active')) return;
       var hit = ev.target.closest && ev.target.closest('.control-track, #control-cover, #control-title, #control-title-text');
       if (!hit) return;
       ev.preventDefault();
@@ -685,8 +747,13 @@
     }
   }
 
-  /* ---- 底栏恒高三段结构（幂等，只用 class/属性，不做测量） ---- */
+  /* ---- 底栏恒高三段结构（幂等，只用 class/属性，不做测量） ----
+     v78：由 MutationObserver 置脏才跑（稳态零查询）；每次重建节点后清空进度时间缓存。 */
   function ensureStructure() {
+    if (!window.__mrStructDirty) return;
+    window.__mrStructDirty = 0;
+    progCache = null;
+    resetPopoverCache();
     var bar = barEl();
     if (!bar) return;
     var extras = document.getElementById('mr-player-extras');
@@ -722,7 +789,6 @@
         try { row.insertBefore(prog, dur); } catch (e) { row.appendChild(prog); }
       }
     }
-    updateProgressTimes();
   }
 
   /* v63b：播放页 4 键按钮组回到 v61 的 body 级 fixed 定位（贴着底栏上沿、右侧滑入滑出）。
@@ -743,13 +809,22 @@
     if (slot) { try { slot.style.height = h; } catch (e) { } }
   }
 
+  /* v78：缓存节点引用 + 文案相同不写（timeupdate ≈4 次/秒） */
+  var progCache = null;
+  var fmtTime = function (x) {
+    if (!isFinite(x) || x < 0) x = 0;
+    var m = Math.floor(x / 60), s = Math.floor(x % 60);
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  };
   function updateProgressTimes() {
     var a = window.audio;
-    var cEl = document.getElementById('mr-time-cur');
-    var dEl = document.getElementById('mr-time-dur');
-    if (!a || !cEl || !dEl) return;
-    var fmt = function (x) { if (!isFinite(x) || x < 0) x = 0; var m = Math.floor(x / 60), s = Math.floor(x % 60); return m + ':' + (s < 10 ? '0' : '') + s; };
-    try { cEl.textContent = fmt(a.currentTime); dEl.textContent = fmt(a.duration); } catch (e) { }
+    if (!a) return;
+    if (!progCache) progCache = { c: document.getElementById('mr-time-cur'), d: document.getElementById('mr-time-dur') };
+    var cEl = progCache.c, dEl = progCache.d;
+    if (!cEl || !dEl) { progCache = null; return; }
+    var ct = fmtTime(a.currentTime), dt = fmtTime(a.duration);
+    if (cEl.textContent !== ct) { try { cEl.textContent = ct; } catch (e) { } }
+    if (dEl.textContent !== dt) { try { dEl.textContent = dt; } catch (e) { } }
   }
 
   /* ---- 歌曲行：底栏顶部槽位 → 屏幕顶部（FLIP） ---- */
@@ -1075,46 +1150,6 @@
   /* 暂停立即切换图标：正在播放时直接 pause，不等淡出 */
   /* 歌单/接口结果本地缓存，减少每次打开都重新拉取 */
   /* 原生 bridge 请求缓存：歌单/推荐等 GET 结果存本地，打开歌单不再每次重新拉 */
-  /* 确保音频缓存开启（播放过的歌第二次直接读本地） */
-  function ensureAudioCacheEnabled() {
-    try {
-      var raw = localStorage.getItem('mineradio-audio-cache-v1');
-      var data = raw ? JSON.parse(raw) : null;
-      if (!data || data.enabled !== true) {
-        localStorage.setItem('mineradio-audio-cache-v1', JSON.stringify({ enabled: true }));
-      }
-    } catch (e) { }
-  }
-
-  function patchBridgeCache() {
-    if (window.__mrBridgeCache || typeof window.__mrBridgeRequest !== 'function') return;
-    window.__mrBridgeCache = 1;
-    var raw = window.__mrBridgeRequest;
-    var TTL = 30 * 60 * 1000;
-    window.__mrBridgeRequest = function (opts) {
-      if (!opts || String(opts.method || 'GET').toUpperCase() !== 'GET' || opts.binary) return raw(opts);
-      var url = opts.url || '';
-      var cacheable = /(playlist|user\/playlists|cloudlist|shelf|daily|recommend|hot|listen)/i.test(url) && !/(cover|img|image|avatar|lyric)/i.test(url);
-      if (!cacheable) return raw(opts);
-      var key = 'mr-bridge-cache:' + url;
-      try {
-        var rec = JSON.parse(localStorage.getItem(key) || 'null');
-        if (rec && Date.now() - rec.t < TTL && typeof rec.body === 'string') {
-          return Promise.resolve({ status: rec.status, headers: rec.headers || {}, body: rec.body });
-        }
-      } catch (e) { }
-      return raw(opts).then(function (ans) {
-        try {
-          var body = ans && ans.body;
-          if (typeof body === 'string' && body.length < 2 * 1024 * 1024) {
-            localStorage.setItem(key, JSON.stringify({ t: Date.now(), status: ans.status, headers: ans.headers || {}, body: body }));
-          }
-        } catch (e) { }
-        return ans;
-      });
-    };
-  }
-
   function patchApiCache() {
     if (window.__mrApiCache) return;
     var raw = window.fetch;
@@ -1158,21 +1193,6 @@
       }
       return out;
     };
-  }
-
-  function bindInstantPause() {
-    if (window.__mrInstantPause) return;
-    window.__mrInstantPause = 1;
-    document.addEventListener('click', function (ev) {
-      var b = ev.target && ev.target.closest ? ev.target.closest('#play-btn') : null;
-      if (!b) return;
-      var a = window.audio;
-      if (a && !a.paused) {
-        ev.stopPropagation();
-        ev.preventDefault();
-        try { a.pause(); } catch (e) { }
-      }
-    }, true);
   }
 
   /* 抑制「已关闭 Home / 已回到首页」这类提示 */
@@ -1229,8 +1249,8 @@
     P('pointer-events', 'none');
     P('display', 'grid');
     var r = ctl.getBoundingClientRect();
-    var barEl = document.getElementById('bottom-bar');
-    var barTop = barEl ? barEl.getBoundingClientRect().top : window.innerHeight;
+    var barBox = document.getElementById('bottom-bar');
+    var barTop = barBox ? barBox.getBoundingClientRect().top : window.innerHeight;
     var w = pop.offsetWidth || 226;
     var h = pop.offsetHeight || 150;
     var left = Math.round(r.left + r.width / 2 - w / 2);
@@ -1258,84 +1278,81 @@
     hidePopover(vp);
   }
 
-  function bindVolumeTap() {
-    if (window.__mrVolumeTap) return;
-    window.__mrVolumeTap = 1;
-    ['pointerdown', 'touchstart', 'mousedown'].forEach(function (t) {
-      document.addEventListener(t, function (ev) {
-        var hit = ev.target && ev.target.closest ? ev.target.closest('#volume-btn') : null;
-        if (hit) ev.stopPropagation();
-      }, true);
-    });
-    document.addEventListener('click', function (ev) {
-      var btn = ev.target && ev.target.closest ? ev.target.closest('#volume-btn') : null;
-      var ctl = document.querySelector('#mr-player-extras #volume-control');
-      if (btn && ctl) {
-        ev.stopPropagation();
-        ev.preventDefault();
-        var vp = document.querySelector('.volume-popover');
-        var openNow = !ctl.__mrPopOpen;
-        ctl.__mrPopOpen = openNow;
-        ctl.classList.toggle('mr-open', openNow);
-        if (openNow) placePopover(ctl, vp);
-        else {
-          hidePopover(vp);
-          window.setTimeout(function () { if (!ctl.__mrPopOpen) hidePopover(vp); }, 80);
-        }
-        return;
-      }
-      if (ctl && !(ev.target.closest && ev.target.closest('.volume-popover'))) {
-        ctl.__mrPopOpen = false;
-        hidePopover(document.querySelector('.volume-popover'));
-        ctl.classList.remove('mr-open');
-      }
-    }, true);
+  /* ---- §9 弹层：播放页 4UI 里的「音量」「词」是同一套开关逻辑，
+     v78 合并为一个实现（原来两份逐行重复 + 6 个 document 捕获监听）。 ---- */
+  var popoverCache = null;
+  function popoverRefs() {
+    if (!popoverCache) popoverCache = {
+      volCtl: document.querySelector('#mr-player-extras #volume-control'),
+      volPop: document.querySelector('.volume-popover'),
+      lyrCtl: document.querySelector('#mr-player-extras .lyric-timing-control'),
+      lyrPop: document.getElementById('lyric-timing-popover')
+    };
+    return popoverCache;
+  }
+  function resetPopoverCache() { popoverCache = null; }
+
+  function closePopover(ctl, pop) {
+    if (ctl) { ctl.__mrPopOpen = false; ctl.classList.remove('mr-open'); }
+    hidePopover(pop);
+    window.setTimeout(function () { if (ctl && !ctl.__mrPopOpen) hidePopover(pop); }, 80);
   }
 
-  function bindLyricTimingTap() {
-    if (window.__mrLyricTimingTap) return;
-    window.__mrLyricTimingTap = 1;
-    /* 宿主可能在自己的 pointerdown/touchstart 里就把弹层打开，这里先掐断 */
+  function togglePopover(ctl, pop) {
+    var openNow = !ctl.__mrPopOpen;
+    ctl.__mrPopOpen = openNow;
+    ctl.classList.toggle('mr-open', openNow);
+    if (openNow) placePopover(ctl, pop);
+    else closePopover(ctl, pop);
+  }
+
+  /* fy: 宿主可能在自己的 pointerdown/touchstart 里就把弹层打开，捕获阶段先掐断 */
+  function bindPlayerPopovers() {
+    if (window.__mrPopoversBound) return;
+    window.__mrPopoversBound = 1;
     ['pointerdown', 'touchstart', 'mousedown'].forEach(function (t) {
       document.addEventListener(t, function (ev) {
-        var hit = ev.target && ev.target.closest ? ev.target.closest('#lyrics-toggle-btn') : null;
+        var hit = ev.target && ev.target.closest ? ev.target.closest('#volume-btn,#lyrics-toggle-btn') : null;
         if (hit) ev.stopPropagation();
       }, true);
     });
     document.addEventListener('click', function (ev) {
-      var btn = ev.target && ev.target.closest ? ev.target.closest('#lyrics-toggle-btn') : null;
-      var ctl = document.querySelector('#mr-player-extras .lyric-timing-control');
-      if (btn && ctl) {
+      var refs = popoverRefs();
+      var t = ev.target;
+      var isVol = t && t.closest ? t.closest('#volume-btn') : null;
+      if (isVol && refs.volCtl && refs.volPop) {
         ev.stopPropagation();
         try { ev.preventDefault(); } catch (e) { }
-        var pop = document.getElementById('lyric-timing-popover');
-        var openNow = !ctl.__mrPopOpen;
-        ctl.__mrPopOpen = openNow;
-        if (openNow) {
-          ctl.classList.add('mr-open');
-          placePopover(ctl, pop);
-        } else {
-          ctl.classList.remove('mr-open');
-          hidePopover(pop);
-          window.setTimeout(function () { if (!ctl.__mrPopOpen) hidePopover(pop); }, 80);
-        }
+        togglePopover(refs.volCtl, refs.volPop);
         return;
       }
-      if (ctl && !(ev.target.closest && ev.target.closest('.lyric-timing-popover'))) {
-        ctl.__mrPopOpen = false;
-        hidePopover(document.getElementById('lyric-timing-popover'));
-        ctl.classList.remove('mr-open');
+      var isLyr = t && t.closest ? t.closest('#lyrics-toggle-btn') : null;
+      if (isLyr && refs.lyrCtl && refs.lyrPop) {
+        ev.stopPropagation();
+        try { ev.preventDefault(); } catch (e) { }
+        togglePopover(refs.lyrCtl, refs.lyrPop);
+        return;
       }
+      /* 点其它地方：把已展开的弹层收起 */
+      if (refs.volCtl && refs.volCtl.__mrPopOpen && !(t && t.closest && t.closest('.volume-popover'))) closePopover(refs.volCtl, refs.volPop);
+      if (refs.lyrCtl && refs.lyrCtl.__mrPopOpen && !(t && t.closest && t.closest('#lyric-timing-popover'))) closePopover(refs.lyrCtl, refs.lyrPop);
     }, true);
   }
 
   /* 登录页内联兜底：保证留边、圆角、可滚动，不顶边框 */
   /* 播放页：把音源/提示条压到顶部歌曲信息下面，避免重叠 */
-  /* 300ms 守护：提示条一出现就压到顶部歌曲信息下面，关闭时清掉内联 */
-  function startNoticeWatch() {
-    if (window.__mrNoticeWatch) return;
-    window.__mrNoticeWatch = window.setInterval(function () {
-      var stack = document.getElementById('source-fallback-stack');
+  /* 提示条：一出现就压到顶部歌曲信息下面，关闭时清掉内联。
+     v78：节点引用缓存一次（原来每 500ms 4 次 getElementById），由 500ms 调度器驱动。 */
+  var noticeCache = null;
+  function noticeWatch() {
+    if (!noticeCache) {
+      noticeCache = {
+        stack: document.getElementById('source-fallback-stack'),
+        notice: document.getElementById('source-fallback-notice')
+      };
+    }
+    {
+      var stack = noticeCache.stack;
       if (stack) {
         var hasCards = stack.children.length > 0;
         if (hasCards && !stack.__mrPos) {
@@ -1357,7 +1374,7 @@
           ['position', 'top', 'left', 'right', 'width', 'z-index'].forEach(function (k) { try { stack.style.removeProperty(k); } catch (e3) { } });
         }
       }
-      var n = document.getElementById('source-fallback-notice');
+      var n = noticeCache.notice;
       if (!n) return;
       var shown = n.classList.contains('show');
       if (shown && !n.__mrNoticePos) {
@@ -1378,12 +1395,16 @@
         n.__mrNoticePos = 0;
         ['position', 'top', 'left', 'right', 'width', 'z-index'].forEach(function (k) { try { n.style.removeProperty(k); } catch (e) { } });
       }
-    }, 500);
+    }
   }
 
   function styleLoginModal() {
     var lm = document.getElementById('login-modal');
-    if (!lm || !lm.classList.contains('show')) return;
+    if (!lm) return;
+    if (!lm.classList.contains('show')) { lm.__mrStyled = 0; return; }
+    /* v78：原来每 2.5s 重写 19 条内联 !important；改成每次「打开」只应用一次 */
+    if (lm.__mrStyled) return;
+    lm.__mrStyled = 1;
     var S = function (el, k, v) { try { el.style.setProperty(k, v, 'important'); } catch (e) { } };
     S(lm, 'padding', 'calc(14px + env(safe-area-inset-top,0px)) 12px calc(20px + env(safe-area-inset-bottom,0px))');
     S(lm, 'align-items', 'center');
@@ -1431,19 +1452,13 @@
       });
     }
     var collects = document.getElementById('collect-btn');
-    if (collects) collects.style.setProperty('display', 'none', 'important');
+    if (collects && collects.style.display !== 'none') collects.style.setProperty('display', 'none', 'important');
   }
 
-  /* 播放页顶部槽位（词/音效/沉浸/音量）在 v62 里永久放在 #bottom-bar 内的
-     #mr-player-extras 中，绝对覆盖顶部槽位，不再按状态搬 DOM、也不再测量底栏 rect。
-     这里保留函数名兼容旧调用点。 */
-  function layoutPlayerExtras() {
-    ensureStructure();
-  }
-
+  var chromeMoreEl = null;
   function syncChromeAvatar() {
-    var more = document.getElementById('phone-chrome-more');
-    if (!more) return;
+    var more = chromeMoreEl || (chromeMoreEl = document.getElementById('phone-chrome-more'));
+    if (!more) { chromeMoreEl = null; return; }
     var ub = document.getElementById('user-btn');
     var img = ub ? ub.querySelector('.top-account-pill img') : null;
     var src = img && img.src ? img.src : '';
@@ -1595,47 +1610,51 @@
     window.addEventListener('touchcancel', function () { active = false; }, { capture: true, passive: true });
   }
 
+  /* ---- §14 入口 ---- */
   ready(function () {
+    window.__mrStructDirty = 1;
     ensureClasses();
     buildChrome();
     initDiyConsole();
+    startStructureObserver();
+    startBarHeightWatch();
     ensureStructure();
     patchHostHooks();
-    startClassWatch();
+    startWatchdog();
     forceViewport();
     registerBackButton();
     registerPinchZoom();
     reorderProgressBar();
+    layoutPlayerExtrasPos();
     enhancePlaylistPanel();
     patchPeek();
     syncChromeAvatar();
     ensureShellState();
     updatePlayerPage();
     layoutPhoneBar();
-    startNoticeWatch();
     styleLoginModal();
     bindTrackEnter();
     bindHostNavTriggers();
     bindStageGuard();
     bindDiyTap();
+    bindFab(document.getElementById('fx-fab'));
     bindStageDrag();
     patchPlaylistEdgeTrigger();
-    bindLyricTimingTap();
-    bindVolumeTap();
+    bindPlayerPopovers();
     patchApiCache();
-    patchBridgeCache();
-    ensureAudioCacheEnabled();
     patchHomeToast();
     tuneRendererOnce();
     tuneAudioFade();
     // 等应用主体初始化后再补一次：宿主会重写 body.className / 重建 #controls 子节点
     window.setTimeout(function () {
+      window.__mrStructDirty = 1;
       ensureClasses();
       ensureStructure();
       patchHostHooks();
       ensureShellState();
     }, 1200);
     window.setTimeout(function () {
+      window.__mrStructDirty = 1;
       ensureStructure();
       patchHostHooks();
       try { hideFab(); } catch (e) { }
@@ -1645,7 +1664,26 @@
   window.MrPhoneShell = {
     enterPlayerPage: enterPlayerPage,
     exitPlayerPage: exitPlayerPage,
-    enable: function () { ensureClasses(); initDiyConsole(); ensureStructure(); patchHostHooks(); bindHostNavTriggers(); startClassWatch(); forceViewport(); registerBackButton(); registerPinchZoom(); reorderProgressBar(); enhancePlaylistPanel(); patchPeek(); syncChromeAvatar(); updatePlayerPage(); layoutPhoneBar(); },
+    enable: function () {
+      window.__mrStructDirty = 1;
+      ensureClasses();
+      initDiyConsole();
+      startStructureObserver();
+      startBarHeightWatch();
+      ensureStructure();
+      patchHostHooks();
+      startWatchdog();
+      forceViewport();
+      registerBackButton();
+      registerPinchZoom();
+      reorderProgressBar();
+      enhancePlaylistPanel();
+      patchPeek();
+      syncChromeAvatar();
+      updatePlayerPage();
+      layoutPhoneBar();
+      bindFab(document.getElementById('fx-fab'));
+    },
     toggleMenu: toggleMenu,
     forceViewport: forceViewport
   };
