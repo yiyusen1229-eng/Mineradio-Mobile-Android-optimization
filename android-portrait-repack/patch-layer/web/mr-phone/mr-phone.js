@@ -79,6 +79,7 @@
         enhancePlaylistPanel();
         patchPeek();
         patchHostHooks();
+        patchPlaylistEdgeTrigger();
       } catch (e) { }
     }, 2000);
     startLayoutWatch();
@@ -133,6 +134,9 @@
     S('display', 'flex');
     S('visibility', 'visible');
     S('opacity', '1');
+    /* v77：宿主 body.immersive-mode 会给 #fx-fab 钉 pointer-events:none（播放页正是沉浸模式），
+       内联 important 才能让 DIY 键在播放页也能点。 */
+    S('pointer-events', 'auto');
     S('position', 'absolute');
     S('z-index', '6');
     S('margin', '0');
@@ -170,12 +174,28 @@
   /* v70：DIY 键 = 视觉控制台开关（不再有「DIY 玩家模式」这个概念）。
      - 面板从 DIY 键位置长出（CSS transform-origin: 右下）
      - 点面板外/按返回键都只关面板，不改任何模式 */
+  /* v77：开态由手机层自持（body.mr-diy-open）。宿主的 fx 面板自己也会被 hover/auto-peek
+     写 .peek/.show class，若用 class 判断开合，宿主一加 .peek 我们就会「以为已经开着」
+     而把它关掉 —— 表现就是点 DIY 打不开。所以开合只认 window.__mrDiyOpen。 */
   function keepDiyPanelOpen() {
     if (!window.__mrDiyOpen) return;
     var panel = document.getElementById('fx-panel');
     if (!panel) return;
+    try { bodyEl().classList.add('mr-diy-open'); } catch (e) { }
     if (!panel.classList.contains('peek') && !panel.classList.contains('show')) panel.classList.add('peek');
-    try { panel.style.setProperty('display', 'block', 'important'); } catch (e) { }
+    showDiyPanelEl(panel);
+  }
+
+  /* v77：播放页是 body.immersive-mode，宿主会写 #fx-panel{opacity:0;visibility:hidden;
+     pointer-events:none}；手机上「视觉控制台」必须能开，所以开态几何/可见性全部内联 important。 */
+  function showDiyPanelEl(panel) {
+    if (!panel) return;
+    try {
+      panel.style.setProperty('display', 'block', 'important');
+      panel.style.setProperty('visibility', 'visible', 'important');
+      panel.style.setProperty('opacity', '1', 'important');
+      panel.style.setProperty('pointer-events', 'auto', 'important');
+    } catch (e) { }
   }
 
   function setDiyPanel(open) {
@@ -185,21 +205,27 @@
     if (window.__mrDiyKeepTimer) { try { clearInterval(window.__mrDiyKeepTimer); } catch (e) { } window.__mrDiyKeepTimer = 0; }
     if (open) {
       window.__mrDiyKeepTimer = window.setInterval(keepDiyPanelOpen, 250);
+      try { bodyEl().classList.add('mr-diy-open'); } catch (e) { }
       panel.classList.add('peek');
-      try { panel.style.setProperty('display', 'block', 'important'); } catch (e) { }
+      showDiyPanelEl(panel);
       var fab = document.getElementById('fx-fab');
       if (fab) fab.classList.add('active');
     } else {
+      try { bodyEl().classList.remove('mr-diy-open'); } catch (e) { }
       panel.classList.remove('show', 'peek', 'pinned');
-      try { panel.style.setProperty('display', 'none', 'important'); } catch (e) { }
+      try {
+        panel.style.setProperty('display', 'none', 'important');
+        panel.style.setProperty('pointer-events', 'none', 'important');
+        panel.style.removeProperty('visibility');
+        panel.style.removeProperty('opacity');
+      } catch (e) { }
       var fab2 = document.getElementById('fx-fab');
       if (fab2) fab2.classList.remove('active');
     }
   }
 
   function diyPanelOpen() {
-    var panel = document.getElementById('fx-panel');
-    return !!(panel && (panel.classList.contains('show') || panel.classList.contains('peek') || panel.classList.contains('pinned')));
+    return !!window.__mrDiyOpen;
   }
 
   /* 把宿主「DIY 玩家模式」固定打开（手机版不再暴露这个开关），并换回原包的 DIY 图标 */
@@ -226,7 +252,7 @@
       if (now - lastAt < 450) return;
       lastAt = now;
       if (ev) { try { ev.stopPropagation(); ev.preventDefault(); } catch (e) { } }
-      setDiyPanel(!diyPanelOpen());
+      setDiyPanel(!window.__mrDiyOpen);
     }
     /* 宿主在 touchstart/pointerdown 上可能 preventDefault，导致 click 不产生；
        所以直接在 DIY 元素上挂 pointerup / touchend / click 三保险（带 450ms 去重）。 */
@@ -251,6 +277,20 @@
     }, true);
   }
 
+  /* ---- 播放页舞台：单指拖拽旋转 / 轻点无响应 / 双击回正 ---- */
+  function stageIsPlayerPage() {
+    try { return document.body.classList.contains('mr-player-page'); } catch (e) { return false; }
+  }
+
+  /* 宿主自带「双击回正」（recenterCamera），但它的监听挂在 renderer.domElement 上，
+     播放页被 #mr-stage-overlay 挡着收不到，所以手机层自己识别双击并调用它。 */
+  function recenterStageView() {
+    try {
+      if (typeof window.recenterCamera === 'function') { window.recenterCamera(); return; }
+      if (window.orbit) window.orbit.recentering = true;
+    } catch (e) { }
+  }
+
   function bindStageDrag() {
     if (window.__mrStageDragBound) return;
     window.__mrStageDragBound = 1;
@@ -260,20 +300,28 @@
       overlay.id = 'mr-stage-overlay';
       document.body.appendChild(overlay);
     }
-    var lastX = 0, lastY = 0, active = false;
+    var lastX = 0, lastY = 0, downX = 0, downY = 0, active = false, moved = false;
+    var lastTapAt = 0, lastTapX = 0, lastTapY = 0;
     overlay.addEventListener('touchstart', function (ev) {
-      if (!window.orbit) return;
+      /* v77：取消默认动作 → WebView 不再合成 mousedown/mousemove/mouseup/click。
+         宿主的点击/悬停链路（canvas click、左缘歌单 peek、粒子跟随）因此完全收不到播放页的轻点，
+         而 touch/pointer 事件照常派发，拖拽旋转与双击检测不受影响。 */
+      try { ev.preventDefault(); } catch (e) { }
       if (ev.touches.length === 1) {
         active = true;
-        lastX = ev.touches[0].clientX;
-        lastY = ev.touches[0].clientY;
+        lastX = downX = ev.touches[0].clientX;
+        lastY = downY = ev.touches[0].clientY;
+        moved = false;
       } else {
         active = false;
       }
-    }, { passive: true });
+    }, { passive: false });
     overlay.addEventListener('touchmove', function (ev) {
-      if (!active || !window.orbit || ev.touches.length !== 1) return;
+      if (ev.touches.length !== 1) { active = false; return; }
       var x = ev.touches[0].clientX, y = ev.touches[0].clientY;
+      var tx = x - downX, ty = y - downY;
+      if (tx * tx + ty * ty > 100) moved = true;   /* >10px 视为拖拽，不当轻点 */
+      if (!active || !window.orbit) return;
       var dx = x - lastX, dy = y - lastY;
       lastX = x; lastY = y;
       try {
@@ -285,7 +333,20 @@
       } catch (e) { }
       ev.preventDefault();
     }, { passive: false });
-    overlay.addEventListener('touchend', function () { active = false; }, { passive: true });
+    overlay.addEventListener('touchend', function (ev) {
+      active = false;
+      if (moved || !stageIsPlayerPage()) return;
+      var t = ev.changedTouches && ev.changedTouches[0];
+      var x = t ? t.clientX : downX, y = t ? t.clientY : downY;
+      var now = Date.now();
+      if (lastTapAt && now - lastTapAt <= 340 && Math.abs(x - lastTapX) <= 34 && Math.abs(y - lastTapY) <= 34) {
+        lastTapAt = 0;
+        recenterStageView();          /* 双击回正 */
+      } else {
+        lastTapAt = now; lastTapX = x; lastTapY = y;
+      }
+    }, { passive: true });
+    overlay.addEventListener('touchcancel', function () { active = false; moved = false; }, { passive: true });
     ['pointerdown', 'mousedown', 'touchstart', 'touchend', 'click', 'dblclick'].forEach(function (type) {
       overlay.addEventListener(type, function (ev) {
         if (ev.touches && ev.touches.length > 1) return;
@@ -297,13 +358,10 @@
     });
   }
 
-  /* v64：舞台（3D 画布 + 拖拽覆盖层）上的单击一律吞掉，不再触发宿主的相机重置/其它响应；
-     双击（或 320ms 内两次点击）才回正视角。底栏、4UI、DIY 的点击不受影响。 */
-  /* v65：不再拦截舞台上的单击（那会连带把拖拽旋转/宿主点击一起吃掉）。
-     只保留「双击回正视角」这一个增强；旋转交给 #mr-stage-overlay 的拖拽逻辑。 */
   /* v76：播放页舞台上所有点击类响应一律屏蔽（宿主在 canvas 上挂了 click/dblclick，
-     会表现为「点左半边有反应」）。只拦 click/dblclick/mouseup/contextmenu，
-     不碰 pointerdown/touchstart/touchmove —— 单指拖拽旋转照常工作。 */
+     会表现为「点左半边有反应」）。
+     v77：把「双击回正」还给用户 —— 双击只做回正，不做任何其它点击响应；
+     鼠标事件（外接鼠标/调试）也按同一语义处理。 */
   function bindStageGuard() {
     if (window.__mrStageGuardBound) return;
     window.__mrStageGuardBound = 1;
@@ -311,9 +369,9 @@
       if (!t || !t.closest) return false;
       return !!t.closest('#canvas-container, canvas, #idle-guide-canvas, #mr-stage-overlay');
     }
-    ['click', 'dblclick', 'mouseup', 'contextmenu'].forEach(function (type) {
+    ['click', 'mouseup', 'contextmenu'].forEach(function (type) {
       window.addEventListener(type, function (ev) {
-        if (!document.body.classList.contains('mr-player-page')) return;
+        if (!stageIsPlayerPage()) return;
         if (!isStageTarget(ev.target)) return;
         try {
           ev.stopImmediatePropagation();
@@ -322,6 +380,31 @@
         } catch (e) { }
       }, true);
     });
+    window.addEventListener('dblclick', function (ev) {
+      if (!stageIsPlayerPage() || !isStageTarget(ev.target)) return;
+      try {
+        ev.stopImmediatePropagation();
+        ev.stopPropagation();
+        ev.preventDefault();
+      } catch (e) { }
+      recenterStageView();
+    }, true);
+  }
+
+  /* 宿主在 window 捕获阶段挂了一个 touchstart：手指落在左侧 104px 带里就会
+     setPeek(playlist-panel, true, 'pl')（桌面 hover 判定的触屏等价物）。
+     这就是「播放页点左半边仍然有反应」的真正来源。播放页里把它关掉；
+     首页保留宿主原行为（左缘点一下开歌单）。 */
+  function patchPlaylistEdgeTrigger() {
+    if (window.__mrEdgeTriggerPatched) return true;
+    if (typeof window.isPlaylistEdgeTrigger !== 'function') return false;
+    window.__mrEdgeTriggerPatched = 1;
+    var orig = window.isPlaylistEdgeTrigger;
+    window.isPlaylistEdgeTrigger = function () {
+      try { if (stageIsPlayerPage()) return false; } catch (e) { }
+      return orig.apply(this, arguments);
+    };
+    return true;
   }
 
   function bindTrackEnter() {
@@ -1536,6 +1619,7 @@
     bindStageGuard();
     bindDiyTap();
     bindStageDrag();
+    patchPlaylistEdgeTrigger();
     bindLyricTimingTap();
     bindVolumeTap();
     patchApiCache();
