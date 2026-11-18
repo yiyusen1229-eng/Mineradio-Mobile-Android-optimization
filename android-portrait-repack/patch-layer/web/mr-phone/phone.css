@@ -2362,3 +2362,53 @@ body.phone-shell #bottom-bar .control-cover{
   height: var(--mr-row-h, 44px)!important;
 }
 
+/* ===== v86：歌单面板滚动/吸顶 + 虚拟列表修复 =====
+   原来 #pl-list 自己滚，宿主的虚拟列表是按 #playlist-panel.scrollTop 算窗口的，
+   于是展开歌单（几千像素的 inline detail）后，滚到底只会看到空白 spacer —— 下面的歌单永远不渲染。
+   改回「面板本身滚动、内部列表不滚」，虚拟列表就正常了；顺便恢复详情头吸顶。 */
+body.phone-shell #playlist-panel{
+  overflow-y: auto!important;
+  overflow-x: hidden!important;
+  display: block!important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+body.phone-shell #playlist-panel #pl-pane,
+body.phone-shell #playlist-panel #queue-pane,
+body.phone-shell #playlist-panel #podcast-pane,
+body.phone-shell #playlist-panel #local-pane{
+  flex: 0 0 auto!important;
+  height: auto!important;
+  max-height: none!important;
+  overflow: visible!important;
+}
+body.phone-shell #playlist-panel #queue-list,
+body.phone-shell #playlist-panel #pl-list,
+body.phone-shell #playlist-panel #podcast-list,
+body.phone-shell #playlist-panel #local-songs-list{
+  flex: 0 0 auto!important;
+  height: auto!important;
+  max-height: none!important;
+  overflow: visible!important;
+  min-height: 0!important;
+}
+body.phone-shell #playlist-panel .playlist-panel-sticky{
+  position: sticky!important;
+  top: 0!important;
+  z-index: 14!important;
+  background: linear-gradient(180deg, rgba(8, 13, 16, .97), rgba(8, 13, 16, .90))!important;
+}
+body.phone-shell #playlist-panel .pl-inline-detail{
+  /* 注意：不能改 height —— 宿主用 inline height 预留整段详情的高度，
+     改掉会让 sticky 容器塌陷、虚拟行也算错位置。 */
+  display: block!important;
+  min-height: 0!important;
+  max-height: none!important;
+  overflow: visible!important;
+}
+body.phone-shell #playlist-panel .pl-detail-sticky{
+  position: sticky!important;
+  top: var(--mr-pl-head-h, 120px)!important;
+  z-index: 12!important;
+  background: linear-gradient(180deg, rgba(12, 17, 27, .96), rgba(12, 17, 27, .86))!important;
+}

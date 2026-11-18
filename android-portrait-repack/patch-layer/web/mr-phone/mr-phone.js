@@ -141,6 +141,148 @@
     } catch (e) { }
   }
 
+  /* ===== v86：/api GET 响应缓存（内存 + IndexedDB）=====
+     宿主每次打开歌单都会重新拉 /api/user/playlists；旧手机层的 localStorage 缓存已在 v78 清掉。
+     这里补一个不占 localStorage 配额的缓存：内存命中即时返回，IndexedDB 持久化（TTL 20 分钟）。
+     注意：宿主的 runtime-log 模块会在手机层之后替换 window.fetch，所以安装函数要可重复调用，
+     看门狗发现 fetch 被换掉时重新包到最外层。 */
+  function installApiFetchCache() {
+    if (typeof window.fetch !== 'function') return false;
+    var state = window.__mrApiCacheState;
+    if (!state) {
+      state = {
+        ttl: 20 * 60 * 1000,
+        dbName: 'mr-api-cache-v1',
+        store: 'kv',
+        mem: Object.create(null),
+        dbPromise: null,
+        wrapped: null
+      };
+      window.__mrApiCacheState = state;
+      window.__mrApiCacheInstalled = 1;
+    }
+    if (window.fetch === state.wrapped) return true;
+
+    function ensureDb() {
+      if (state.dbPromise) return state.dbPromise;
+      state.dbPromise = new Promise(function (resolve) {
+        var settled = false;
+        function done(db) { if (settled) return; settled = true; resolve(db); }
+        function create(ver) {
+          var req;
+          try { req = indexedDB.open(state.dbName, ver); } catch (e) { state.dbPromise = null; done(null); return; }
+          req.onupgradeneeded = function () {
+            try { if (!req.result.objectStoreNames.contains(state.store)) req.result.createObjectStore(state.store, { keyPath: 'k' }); } catch (e) { }
+          };
+          req.onsuccess = function () {
+            var db = req.result;
+            if (db.objectStoreNames.contains(state.store)) { done(db); return; }
+            var current = db.version;
+            try { db.close(); } catch (e) { }
+            if (ver > current + 1) {
+              try {
+                var del = indexedDB.deleteDatabase(state.dbName);
+                del.onsuccess = del.onerror = del.onblocked = function () { create(1); };
+              } catch (e) { state.dbPromise = null; done(null); }
+              return;
+            }
+            create(ver + 1);
+          };
+          req.onerror = function () { state.dbPromise = null; done(null); };
+          req.onblocked = function () { state.dbPromise = null; done(null); };
+        }
+        create(1);
+      });
+      return state.dbPromise;
+    }
+    function dbGet(db, key) {
+      return new Promise(function (resolve) {
+        try {
+          var rq = db.transaction(state.store, 'readonly').objectStore(state.store).get(key);
+          rq.onsuccess = function () { resolve(rq.result || null); };
+          rq.onerror = function () { resolve(null); };
+        } catch (e) { resolve(null); }
+      });
+    }
+    function dbPut(db, rec) {
+      try { db.transaction(state.store, 'readwrite').objectStore(state.store).put(rec); } catch (e) { }
+    }
+    function makeJsonResponse(data) {
+      try {
+        return new Response(JSON.stringify(data), { status: 200, statusText: 'OK', headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-MR-Cache': '1' } });
+      } catch (e) { return null; }
+    }
+    function fetchUrl(input) {
+      try { return typeof input === 'string' ? input : (input && input.url) || ''; } catch (e) { return ''; }
+    }
+    function cacheable(url, init) {
+      try {
+        if ((((init && init.method) || 'GET').toUpperCase()) !== 'GET') return false;
+        try { url = new URL(url, location.href).href; } catch (e) { return false; }
+        if (url.indexOf(location.origin) !== 0) return false;
+        if (!/\/api\//.test(url)) return false;
+        if (/\.(mp3|m4a|flac|ape|wav|jpg|jpeg|png|webp|gif|mp4|bin|ttf|woff2?|zip)(\?|$)/i.test(url)) return false;
+        if (/[?&](stream|binary|raw)=/i.test(url)) return false;
+        if (/\/(cover|image|img|avatar|stream|audio)\//i.test(url)) return false;
+        return true;
+      } catch (e) { return false; }
+    }
+    var rawFetch = window.fetch;
+    var wrapped = function (input, init) {
+      var absUrl;
+      try { absUrl = new URL(fetchUrl(input), location.href).href; } catch (e) { return rawFetch.apply(window, arguments); }
+      if (!cacheable(absUrl, init)) return rawFetch.apply(window, arguments);
+      var now = Date.now();
+      var hit = state.mem[absUrl];
+      if (hit && now - hit.t < state.ttl) {
+        var cachedResp = makeJsonResponse(hit.d);
+        if (cachedResp) return Promise.resolve(cachedResp);
+      }
+      var self = this;
+      return (async function () {
+        if (!hit) {
+          var db0 = await ensureDb();
+          if (db0) {
+            var rec = await dbGet(db0, absUrl);
+            if (rec && rec.t && now - rec.t < state.ttl) {
+              state.mem[absUrl] = { t: rec.t, d: rec.d };
+              var resp1 = makeJsonResponse(rec.d);
+              if (resp1) return resp1;
+            }
+          }
+        }
+        var res = await rawFetch.call(self, input, init);
+        try {
+          if (res && res.ok) {
+            var clone = res.clone();
+            clone.json().then(function (data) {
+              var item = { t: Date.now(), d: data };
+              state.mem[absUrl] = item;
+              ensureDb().then(function (db2) {
+                if (!db2) return;
+                dbPut(db2, { k: absUrl, t: item.t, d: item.d });
+                try {
+                  var all = db2.transaction(state.store, 'readonly').objectStore(state.store).getAll();
+                  all.onsuccess = function () {
+                    var rows = all.result || [];
+                    if (rows.length <= 400) return;
+                    rows.sort(function (a, b) { return (a.t || 0) - (b.t || 0); });
+                    var tx = db2.transaction(state.store, 'readwrite');
+                    rows.slice(0, rows.length - 400).forEach(function (row) { try { tx.objectStore(state.store).delete(row.k); } catch (e) { } });
+                  };
+                } catch (e) { }
+              });
+            }).catch(function () { });
+          }
+        } catch (e) { }
+        return res;
+      })();
+    };
+    state.wrapped = wrapped;
+    window.fetch = wrapped;
+    return true;
+  }
+
   function mrLocalStorageBoot() {
     installLocalStorageGuard();
     try { mrPruneLocalStorageCaches(false); } catch (e) { }
@@ -208,6 +350,8 @@
       WATCH_TICK++;
       try { noticeWatch(); } catch (e) { }          /* 500ms */
       try { panelKbFit(); } catch (e) { }
+      try { updatePlaylistStickyVars(); } catch (e) { }
+      try { installApiFetchCache(); } catch (e) { }
       try {
         /* 在线歌词模态 / DIY 面板打开时，4UI 弹层一律收起（兜底，防宿主换入口打开） */
         var lom = document.getElementById('lyric-online-modal');
@@ -387,6 +531,8 @@
       if (fab) fab.classList.add('active');
       window.__mrDiyKeepTimer = window.setTimeout(keepDiyPanelOpen, 500);
       try { panelKbFit(); } catch (e) { }
+      try { updatePlaylistStickyVars(); } catch (e) { }
+      try { installApiFetchCache(); } catch (e) { }
       return;
     }
     if (!window.__mrDiyOpen) return;          /* 已经关着（或正在播收起动画） */
@@ -1828,6 +1974,17 @@
     updateProgressTimes();
   }
 
+  /* v86：歌单面板吸顶偏移——面板头部（标题/切页签）吸顶后，展开歌单的标题也要紧贴它吸顶 */
+  function updatePlaylistStickyVars() {
+    try {
+      var panel = document.getElementById('playlist-panel');
+      if (!panel) return;
+      var head = panel.querySelector('.playlist-panel-sticky');
+      var h = head ? Math.round(head.getBoundingClientRect().height) : 0;
+      if (h > 0) panel.style.setProperty('--mr-pl-head-h', h + 'px');
+    } catch (e) { }
+  }
+
   function openPlaylistPanel() {
     var panel = document.getElementById('playlist-panel');
     if (!panel) return;
@@ -1963,6 +2120,7 @@
     window.__mrStructDirty = 1;
     ensureClasses();
     mrLocalStorageBoot();
+    installApiFetchCache();
     buildChrome();
     initDiyConsole();
     startStructureObserver();

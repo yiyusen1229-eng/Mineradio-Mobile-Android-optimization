@@ -299,3 +299,46 @@ Setting the value of 'mineradio-home-dashboard-video-meta-v1' exceeded the quota
 验证：同一段转场逐帧测 DIY 区域亮度 **恒定 44.5~44.6**（全程 255 峰值），不再有压暗段；封面 47↔47、行位置 (12,54)→(21,712) 连续、底栏恒高 138；回归 23/23 PASS。
 
 另外确认用户真机已用 v84 成功保存 `1000112076.mp4`（3.6MB，meta 落库、按钮变「更换 MP4」），说明 localStorage 配额修复在真实选择器路径下也生效。
+---
+
+## 15. v86：歌单面板——缓存 / 展开后滚动 / 吸顶
+
+### 15.1 每次打开歌单都要等加载
+宿主 `apiJson()` 直接 `fetch`，没有缓存层；旧 v6x 手机层曾在 `mr-phone.js` 里包了 `window.fetch` 做
+`mr-api-cache:` 的 localStorage 缓存，v78 重构时当成「废弃代码」删掉了 → 每次冷启动/列表重建都要重新拉
+`/api/user/playlists` 等接口。
+
+新增缓存（patch 层，不动宿主）：
+- 内存 `Map`（命中即返回）+ IndexedDB `mr-api-cache-v1/kv` 持久化，TTL 20 分钟，超过 400 条按时间淘汰；
+- 只缓存同源 `GET /api/*`（排除 mp3/封面/二进制）；
+- 命中时返回 `new Response(JSON.stringify(data), {headers:{'X-MR-Cache':'1'}})`，宿主 `res.json()` 无感；
+- **关键坑**：宿主 `00-state/00-runtime-log.js` 会在手机层脚本之后再次替换 `window.fetch`（日志包装），
+  把我们第一次包的覆盖掉了。所以安装函数做成可重入：保存 `state.wrapped`，看门狗每 tick 检查
+  `window.fetch === state.wrapped`，不等就重新包到最外层。
+
+实测：同一接口第一次 75ms、第二次 **1ms 且 `x-mr-cache:1`**；IndexedDB 记录数随请求增长。
+
+### 15.2 展开歌单滚到底看不到其它歌单
+`#pl-list`（内部滚动容器）被设为 `overflow:auto`，但宿主虚拟列表（`renderUserPlaylistsList`）是用
+`panel.getBoundingClientRect()` / `panel.scrollTop` / `panel.clientHeight` 算可见窗口的 → 滚动发生在
+内层，窗口永远停在顶部；展开的 detail 由 inline `height:5562px` 撑开，滚到底只看到空白
+`playlist-virtual-spacer`，其后的其它歌单永不渲染。
+
+改法（phone.css）：面板自己滚、内部容器不滚：
+- `#playlist-panel{overflow-y:auto}`；
+- `#pl-pane/#queue-pane/#podcast-pane/#local-pane{flex:0 0 auto;height:auto;overflow:visible}`；
+- `#pl-list/#queue-list/#podcast-list/#local-songs-list{flex:0 0 auto;height:auto;overflow:visible}`；
+- `.pl-inline-detail{display:block;overflow:visible}` 但**不能改 height**（宿主用 inline height 预留整段高度，
+  改掉会让 sticky 容器塌陷、虚拟行算错位置——这是个坑，已经踩过一次）。
+
+实测：展开「我喜欢（297 首）」→ 面板 scrollHeight 6690，滚到 6060 时 `我的2025年度歌单` 等卡片渲染在视口内。
+
+### 15.3 展开歌单的标题/封面吸顶
+宿主本身有 `.pl-detail-sticky{position:sticky;top:126px}`，但 phone.css 里 v6x 规则写成了
+`position:static!important` 把它关掉了。恢复：
+- `.pl-detail-sticky{position:sticky!important; top:var(--mr-pl-head-h,120px)!important; z-index:12}`；
+- `--mr-pl-head-h` 由 `updatePlaylistStickyVars()` 按面板头部（`.playlist-panel-sticky`）实测高度写入，
+  看门狗里每 tick 更新；
+- 面板头部本身也 `position:sticky; top:0; z-index:14`，带不透明渐变底。
+
+实测：面板头 73~194、歌单头 195~326 全程钉住，歌曲行从下面滚过（见截图）。
