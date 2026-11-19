@@ -1472,13 +1472,10 @@
     overscroll-behavior: contain;
   }
 
-  /* Sheet drag handle affordance */
+  /* Sheet drag handle affordance（v105：只保留歌单面板；DIY 视觉控制台不再有顶部小横条，
+     它只在 .show/.peek 时插入，正是打开面板时内容下跳 16px 的原因） */
   body.phone-shell #playlist-panel.show::before,
-  body.phone-shell #playlist-panel.peek::before,
-  body.phone-shell #fx-panel.show::before,
-  body.phone-shell #fx-panel.peek::before,
-  body.phone-shell.diy-mode #fx-panel.fx-console.show::before,
-  body.phone-shell.diy-mode #fx-panel.fx-console.peek::before {
+  body.phone-shell #playlist-panel.peek::before {
     content: '';
     display: block;
     width: 42px;
@@ -1581,8 +1578,7 @@ flex-direction:row!important;align-items:center!important;justify-content:flex-s
 body.phone-shell #bottom-bar #controls > .control-cluster.actions > .ctrl-btn{display:none!important;}
 body.phone-shell #bottom-bar #controls .control-track{flex:1 1 auto!important;min-width:0!important;width:auto!important;
 position:relative!important;left:auto!important;top:auto!important;}
-body.phone-shell #bottom-bar #controls > .control-cluster.transport{display:flex!important;align-items:center!important;
-justify-content:center!important;gap:10px!important;}
+body.phone-shell #bottom-bar #controls > .control-cluster.transport{display:flex!important;align-items:center!important;}
 body.phone-shell #bottom-bar #controls > .control-cluster.modes{display:none!important;}
 body.phone-shell #search-area{left:8px!important;right:64px!important;transform:none!important;width:auto!important;
 max-width:none!important;top:calc(6px + env(safe-area-inset-top,0px))!important;z-index:9000!important;}
@@ -1624,11 +1620,12 @@ body.mr-player-page .mr-top-track #control-cover{width:42px!important;height:42p
 body.mr-player-page #bottom-bar #volume-btn{display:none!important;}
 body.mr-player-page #bottom-bar #play-mode-btn,body.mr-player-page #bottom-bar #mini-queue-btn{display:flex!important;}
 body.phone-shell #bottom-bar #heart-btn,body.phone-shell #bottom-bar #cuefield-automix-btn{display:flex!important;}
-body.phone-shell #bottom-bar #controls > .control-cluster.transport{justify-content:space-between!important;gap:0!important;width:100%!important;}
-body.phone-shell #bottom-bar #controls > .control-cluster.transport > .ctrl-btn{flex:0 0 auto!important;width:42px!important;height:42px!important;}
-#mr-player-extras{position:fixed;left:10px;right:10px;z-index:8500;display:none;align-items:center;justify-content:flex-end;gap:6px;}
+/* v105：传输行几何/尺寸统一放在文件末尾「自适应布局硬化」段（尺寸只来自 --mr-ctrl-size，
+   空间不足时由 flex 等比收缩）。这里原先写死 width/height:42px 且特异性(0,2,4,1)压过了
+   V67b 的 var(--mr-ctrl-size)，是底栏在 375/360 宽机型上越界的根因，已删除。 */
+#mr-player-extras{position:fixed;z-index:8500;display:none;align-items:center;justify-content:flex-end;gap:6px;}
 body.mr-player-page #mr-player-extras{display:flex;}
-#mr-player-extras .ctrl-btn{width:40px!important;height:40px!important;border-radius:12px!important;display:flex!important;align-items:center!important;justify-content:center!important;background:rgba(10,16,18,.55)!important;border:1px solid rgba(255,255,255,.12)!important;}
+#mr-player-extras .ctrl-btn{width:var(--mr-ctrl-size)!important;height:var(--mr-ctrl-size)!important;border-radius:12px!important;display:flex!important;align-items:center!important;justify-content:center!important;background:rgba(10,16,18,.55)!important;border:1px solid rgba(255,255,255,.12)!important;}
 #mr-player-extras #controls-hide-btn,#mr-player-extras #immersive-btn{display:flex!important;opacity:1!important;visibility:visible!important;}
 #mr-player-extras > .control-cluster.modes{display:flex!important;align-items:center!important;gap:10px!important;position:relative!important;width:auto!important;margin-left:auto!important;justify-content:flex-end!important;}
 #mr-player-extras #lyric-timing-control,#mr-player-extras #volume-control{display:flex!important;align-items:center!important;gap:6px!important;position:relative!important;}
@@ -1641,7 +1638,7 @@ body.mr-player-page #mr-player-extras{display:flex;}
 #mr-progress-row{display:flex!important;align-items:center!important;gap:6px!important;width:100%!important;}
 #mr-progress-row #progress-bar{flex:1 1 auto!important;min-width:0!important;}
 #mr-time-cur,#mr-time-dur{font:11px system-ui,-apple-system,sans-serif!important;color:#9fb8b1!important;min-width:34px!important;text-align:center!important;}
-body.mr-player-page #bottom-bar #controls > .control-cluster.transport{gap:10px!important;}
+/* v105：原 body.mr-player-page ...{gap:10px!important} 已删（与 --mr-transport-gap 争同一属性且被后者覆盖） */
 body.phone-shell #user-btn{display:none!important;visibility:hidden!important;}
 /* v81：尺寸统一走 --phone-chrome-height（原来写死 44px，和 58px 的搜索框不等高） */
 body.phone-shell #phone-chrome-more{width:var(--phone-chrome-height, 48px)!important;height:var(--phone-chrome-height, 48px)!important;border-radius:16px!important;padding:0!important;display:flex!important;align-items:center!important;justify-content:center!important;overflow:hidden!important;}
@@ -1797,7 +1794,10 @@ body.phone-shell #bottom-bar#bottom-bar{
   left:8px!important;right:8px!important;width:auto!important;max-width:none!important;
   bottom:calc(8px + var(--mr-sys-bottom, 22px))!important;
   transform:none!important;filter:none!important;z-index:42!important;
-  padding:8px 12px 10px!important;gap:6px!important;border-radius:18px!important;
+  /* v105：这里的 padding:8px 12px 10px / gap:6px 已删 —— 它用双 id 特异性压过了
+     V67b 的 var(--mr-bar-pad-x)，让底栏内边距在窄屏上无法收敛；现在 padding 交还
+     变量，gap 由 LAYOUT_CSS 的 6px 提供。 */
+  border-radius:18px!important;
   backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
   background:rgba(8,14,16,.60)!important;background-image:none!important;
   border:1px solid rgba(255,255,255,.10)!important;
@@ -2029,9 +2029,9 @@ body.phone-shell #fx-fab{
   width:var(--mr-ctrl-size)!important;height:var(--mr-ctrl-size)!important;
   border-radius:14px!important;margin:0!important;z-index:6!important;
 }
-/* 4UI 与其右侧的 DIY 等间距：right = inset + DIY 宽 + 间距 */
+/* 4UI 与其右侧的 DIY 等间距：right = inset + DIY 宽 + 6px（V69 定值统一在这里给） */
 body.phone-shell #mr-player-extras{
-  right:calc(clamp(6px,1.6vw,12px) + var(--mr-ctrl-size) + var(--mr-gap))!important;
+  right:calc(clamp(6px,1.6vw,12px) + var(--mr-ctrl-size) + 6px)!important;
   padding-left:env(safe-area-inset-left, 0px)!important;
   padding-right:env(safe-area-inset-right, 0px)!important;
 }
@@ -2050,7 +2050,7 @@ body.phone-shell #empty-home{bottom:calc(var(--mr-bar-h,150px) - 12px + var(--mr
 }
 /* 短屏深色横屏：底栏压缩、extras/DIY 同步缩小 */
 @media (orientation:landscape) and (max-height:520px){
-  body.phone-shell #mr-player-extras{height:34px!important;right:calc(clamp(6px,1.6vw,12px) + var(--mr-ctrl-size) + 4px)!important;}
+  /* v105：#mr-player-extras 的 right/height 已统一由下方 V69 横屏块提供，这里不再重复 */
   body.phone-shell #fx-fab{top:6px!important;}
   body.phone-shell #playlist-panel{bottom:calc(var(--mr-bar-h,120px) + 4px)!important;}
 }
@@ -2079,13 +2079,9 @@ body.phone-shell #search-area.has-results #search-results{
   body.phone-shell #bottom-bar #controls > .control-cluster.transport{gap:clamp(4px,1.4vw,12px)!important;}
 }
 
-/* ============ V69：4UI 与 DIY 的间距（各断点统一 6px 视觉间距） ============ */
-body.phone-shell #bottom-bar #mr-player-extras{
-  right:calc(clamp(6px, 1.6vw, 12px) + var(--mr-ctrl-size) + 6px)!important;
-}
-@media (max-width:360px){
-  
-}
+/* v105：原「V69：4UI 与 DIY 的间距」块（body.phone-shell #bottom-bar #mr-player-extras{right:calc(...+6px)}）
+   与上面的通用规则重复且特异性更高，已删除；空 @media (max-width:360px){} 一并删除。
+   横屏矮屏的 34px 高度/6px 间距仍保留在下方 @media 里。 */
 @media (orientation:landscape) and (max-height:520px){
   body.phone-shell #bottom-bar #mr-player-extras{
     right:calc(6px + var(--mr-ctrl-size) + 6px)!important;
@@ -2762,8 +2758,8 @@ body:has(#home-platform-recommend-mask.show) #phone-chrome-slot{
    ＋ 青色 text-shadow。v100 那套 34px 圆形按钮/独立 #mr-lyric-aux 容器已整段删除。
    按钮 DOM 由 mr-phone.js 插进 #mr-player-extras > .control-cluster.modes，紧挨「词」右侧。 */
 body.phone-shell #mr-player-extras .ctrl-btn.mr-aux-btn{
-  width: 40px!important;
-  height: 40px!important;
+  width: var(--mr-ctrl-size)!important;
+  height: var(--mr-ctrl-size)!important;
   border-radius: 12px!important;
   font-size: 13.33px!important;
   font-weight: 700!important;
@@ -2791,8 +2787,8 @@ body.mr-transitioning #mr-player-extras .ctrl-btn.mr-aux-btn{
    避免窄屏时最左一颗被挤出屏幕 */
 body.phone-shell.mr-player-page #mr-player-extras{ left: 8px!important; }
 @media (max-width:359px){
+  /* v105：按钮尺寸统一由 var(--mr-ctrl-size)（≤360 断点已给 36px）提供，这里只收窄间距 */
   body.phone-shell #mr-player-extras > .control-cluster.modes{ gap: 6px!important; }
-  body.phone-shell #mr-player-extras .ctrl-btn{ width: 36px!important; height: 36px!important; }
 }
 
 /* ===== v102：大面板去实时模糊（Android WebView 掉帧主因）+ 预热态隐藏 ===== */
@@ -2904,3 +2900,75 @@ body.phone-shell #search-results .mr-search-slow-text{
   color:rgba(255,255,255,.72)!important;
   font-size:13.5px!important;
 }
+
+/* ================= v105：自适应布局硬化（单一尺寸来源 + 容器不溢出） =================
+   背景：V67b 的 clamp 变量体系只接管了间距/内边距，关键控件尺寸被更早的写死值用更高
+   特异性压住（传输键 42px、4UI 键 40px）；而旧审计只检查「是否越出视口」，不检查
+   「是否越出底栏」，所以 375/360 这类窄屏一直绿灯。
+   本段三件事：
+     ① 底栏传输行 / 4UI：尺寸只来自 --mr-ctrl-size，空间不足时 flex 等比收缩；
+     ② 在线歌词搜索：面板网格列可压缩（minmax(0,1fr)），内容一律不撑破面板；
+     ③ DIY 视觉控制台：删小横条（见 LAYOUT 段）、删副标题、标题居中、打开不再跳动。
+   原则：不再写死 px 尺寸；不为单一机型新增断点，靠 clamp/flex 连续收敛。 */
+
+/* ① 底栏传输行 —— 按钮按可用宽度等比分配，上限 --mr-ctrl-size（≥320 宽都不越界） */
+body.phone-shell #bottom-bar #controls > .control-cluster.transport{
+  justify-content:space-between!important;
+  width:100%!important;min-width:0!important;
+  gap:var(--mr-transport-gap)!important;
+}
+body.phone-shell #bottom-bar #controls > .control-cluster.transport > .ctrl-btn{
+  flex:1 1 0!important;
+  min-width:0!important;
+  width:auto!important;
+  max-width:var(--mr-ctrl-size)!important;
+  height:var(--mr-ctrl-size)!important;
+}
+/* 4UI 行整体不允许超出底栏（右对齐，超宽时由 flex 收缩） */
+body.phone-shell #mr-player-extras{
+  max-width:calc(100% - 16px)!important;
+  min-width:0!important;
+}
+body.phone-shell #mr-player-extras > .control-cluster.modes{min-width:0!important;}
+
+/* ② 在线歌词搜索弹层 —— 面板只声明了 grid-template-rows，隐式单列按 max-content
+   撑到 377.8px（面板内容宽仅 322.8），「应用」按钮被 overflow:hidden 裁掉。
+   这里补 minmax(0,1fr) 列、给结果行/文本列 min-width:0，长标题走省略号。 */
+body.phone-shell #lyric-online-modal .lyric-online-panel{
+  grid-template-columns:minmax(0,1fr)!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-results,
+body.phone-shell #lyric-online-modal .lyric-online-result-row{
+  width:100%!important;min-width:0!important;box-sizing:border-box!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-result-row{
+  grid-template-columns:minmax(0,1fr) auto auto!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-row-copy{
+  min-width:0!important;overflow:hidden!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-row-copy > *{
+  min-width:0!important;max-width:100%!important;
+  white-space:nowrap!important;
+  overflow:hidden!important;text-overflow:ellipsis!important;
+}
+body.phone-shell #lyric-online-modal .lyric-online-result-row .lyric-online-tag,
+body.phone-shell #lyric-online-modal .lyric-online-result-row .lyric-online-btn{
+  flex:0 0 auto!important;white-space:nowrap!important;
+}
+
+/* ③ DIY 视觉控制台头部 —— 框里只留居中的「视觉控制台」（小横条已在 LAYOUT 段删除） */
+body.phone-shell #fx-panel .fx-sub{display:none!important;}
+body.phone-shell #fx-panel .fx-head{
+  justify-content:center!important;
+  align-items:center!important;
+  border-bottom:0!important;
+}
+body.phone-shell #fx-panel .fx-head-main{
+  flex:1 1 auto!important;min-width:0!important;
+  display:flex!important;flex-direction:column!important;
+  align-items:center!important;justify-content:center!important;
+  text-align:center!important;
+}
+body.phone-shell #fx-panel .fx-title{width:100%!important;text-align:center!important;}
+body.phone-shell #fx-panel .fx-head-actions{display:none!important;}
