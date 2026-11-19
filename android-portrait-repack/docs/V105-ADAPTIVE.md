@@ -116,3 +116,23 @@ body.phone-shell #home-platform-recommend-mask .home-platform-recommend-tabs{
 **验证**：v105b APK 装机后 CDP 实测 320×568 与 375×800；`panel-audit-v105.js` 在 320/360/375/393/430 × 歌单/平台推荐/今日聆听/播放控制台/导入 共 25 组全部 `FLAGGED=0`；底栏矩阵仍全在栏内；回归 23/23 PASS ×2（一次「双击回正」误触 Wallpaper Engine 提示属已知偶发）。
 
 **产物**：`Mineradio竖屏-v105b-自适应布局.apk`（75,972,415 B，SHA256 `688DBCAC7D3208CDBE0A372EB49DFF4DD66767B86F45F4033780421C3A441162`）。
+
+## 固定验收门槛（v105 起）
+
+```powershell
+cd "E:\IDM下载目录\DSH工作产生文件\_tmp\verify2"; .\check-all.ps1
+```
+一次跑完三段并在每段前重启 App（避免跨段状态污染）：
+1. `regress-v78.js` —— 23 项功能回归（脚本内已加 1 次自动重试）
+2. `panel-audit-v105.js` —— 弹层/面板容器内越界（320/360/375/393/430 × 5 个弹层）
+3. `adaptive-audit-v105.js` —— 底栏容器内越界（320-430 + 横屏）
+
+期望输出：`regressFail=0 panelAuditFail=0 barChildOverflowFail=0` → `RESULT: PASS`。
+两个前提（脚本已内置，手工跑时注意）：① 每段前要 `adb forward` 到新 pid；② 回归的「双击回正」需要**有播放态**
+（全新重启未起播时，双击会走「没有识别到 Wallpaper Engine 项目」提示路径，属测试态依赖、不是布局回归）。
+
+审计脚本的判据设计（防误报）：
+- 「子元素越出容器」而不是「越出视口」（旧 `adaptive-test.js` 的盲区就在这里）
+- 可滚动祖先内的越界不计（横向滚动条带本来就是可滚的）
+- 装饰性满幅元素（`#album-bg*`、hero 图、video/canvas）与瞬时通知（`source-fallback`/`toast`/`leaving`）不计
+- `opacity` 不继承 → 显隐判断要爬祖先链（否则隐藏 4UI 行的子元素会被误判为越界）
