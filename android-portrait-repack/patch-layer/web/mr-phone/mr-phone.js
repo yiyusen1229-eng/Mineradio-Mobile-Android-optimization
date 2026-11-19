@@ -1607,98 +1607,8 @@
   }
 
 
-  /* ===== v99：歌词 音/译 切换（注音=假名转罗马音；译文=宿主双语翻译） ===== */
-  var MR_AUX_MODE_KEY = 'mr-lyric-aux-mode-v1';
-  var mrLyricAux = { mode: 'off', state: null };
-
-  var MR_ROMA_TABLE = {
-    'あ':'a','い':'i','う':'u','え':'e','お':'o',
-    'か':'ka','き':'ki','く':'ku','け':'ke','こ':'ko',
-    'さ':'sa','し':'shi','す':'su','せ':'se','そ':'so',
-    'た':'ta','ち':'chi','つ':'tsu','て':'te','と':'to',
-    'な':'na','に':'ni','ぬ':'nu','ね':'ne','の':'no',
-    'は':'ha','ひ':'hi','ふ':'fu','へ':'he','ほ':'ho',
-    'ま':'ma','み':'mi','む':'mu','め':'me','も':'mo',
-    'や':'ya','ゆ':'yu','よ':'yo',
-    'ら':'ra','り':'ri','る':'ru','れ':'re','ろ':'ro',
-    'わ':'wa','を':'wo','ん':'n',
-    'が':'ga','ぎ':'gi','ぐ':'gu','げ':'ge','ご':'go',
-    'ざ':'za','じ':'ji','ず':'zu','ぜ':'ze','ぞ':'zo',
-    'だ':'da','ぢ':'ji','づ':'zu','で':'de','ど':'do',
-    'ば':'ba','び':'bi','ぶ':'bu','べ':'be','ぼ':'bo',
-    'ぱ':'pa','ぴ':'pi','ぷ':'pu','ぺ':'pe','ぽ':'po',
-    'ぁ':'a','ぃ':'i','ぅ':'u','ぇ':'e','ぉ':'o',
-    'ゃ':'ya','ゅ':'yu','ょ':'yo','ゎ':'wa','ゔ':'vu',
-    'ー':'-','・':' ','、':', ','。':'.','！':'!','？':'?','「':'"','」':'"','『':'"','』':'"','（':'(','）':')','　':' '
-  };
-  var MR_ROMA_COMBOS = {
-    'きゃ':'kya','きゅ':'kyu','きょ':'kyo','しゃ':'sha','しゅ':'shu','しょ':'sho','ちゃ':'cha','ちゅ':'chu','ちょ':'cho',
-    'にゃ':'nya','にゅ':'nyu','にょ':'nyo','ひゃ':'hya','ひゅ':'hyu','ひょ':'hyo','みゃ':'mya','みゅ':'myu','みょ':'myo',
-    'りゃ':'rya','りゅ':'ryu','りょ':'ryo','ぎゃ':'gya','ぎゅ':'gyu','ぎょ':'gyo','じゃ':'ja','じゅ':'ju','じょ':'jo',
-    'びゃ':'bya','びゅ':'byu','びょ':'byo','ぴゃ':'pya','ぴゅ':'pyu','ぴょ':'pyo','てぃ':'ti','でぃ':'di','ふぁ':'fa','ふぃ':'fi','ふぇ':'fe','ふぉ':'fo',
-    'うぇ':'we','うぃ':'wi','ゔぁ':'va','ゔぃ':'vi','ゔぇ':'ve','ゔぉ':'vo','しぇ':'she','ちぇ':'che','じぇ':'je'
-  };
-  function mrKanaToRomaji(input) {
-    var s = String(input || '');
-    if (!s) return '';
-    /* 片假名 → 平假名 */
-    s = s.replace(/[\u30a1-\u30f6]/g, function (ch) {
-      return String.fromCharCode(ch.charCodeAt(0) - 0x60);
-    });
-    var out = '';
-    for (var i = 0; i < s.length; i++) {
-      var c = s.charAt(i);
-      var two = s.substr(i, 2);
-      if (two === 'っ') { /* 促音：双写下一个辅音 */ }
-      if (c === 'っ') {
-        var nxt = s.charAt(i + 1);
-        var nxt2 = s.substr(i + 1, 2);
-        var roma = MR_ROMA_COMBOS[nxt2] || MR_ROMA_TABLE[nxt] || MR_ROMA_TABLE[s.charAt(i + 1)] || '';
-        if (roma) out += roma.charAt(0);
-        continue;
-      }
-      if (MR_ROMA_COMBOS[two]) { out += MR_ROMA_COMBOS[two]; i++; continue; }
-      if (MR_ROMA_TABLE[c] !== undefined) { out += MR_ROMA_TABLE[c]; continue; }
-      out += c;
-    }
-    return out.replace(/\s+/g, ' ').trim();
-  }
-  function mrHasKana(text) {
-    return /[\u3040-\u30ff]/.test(String(text || ''));
-  }
-  /* 把注音写进 line.translation（宿主渲染第二行用的就是这个字段） */
-  function mrApplyRomajiLines(lines) {
-    var src = Array.isArray(lines) ? lines : [];
-    return src.map(function (line) {
-      var copy = {};
-      for (var k in line) { if (Object.prototype.hasOwnProperty.call(line, k)) copy[k] = line[k]; }
-      var text = String(copy.text || '');
-      if (text && mrHasKana(text)) {
-        var roma = mrKanaToRomaji(text);
-        if (roma && roma !== text) copy.translation = roma;
-      }
-      return copy;
-    });
-  }
-
-  function mrLyricAuxButtons() {
-    var box = document.getElementById('mr-lyric-aux');
-    if (box) return box;
-    box = document.createElement('div');
-    box.id = 'mr-lyric-aux';
-    box.innerHTML = '<button type="button" data-aux="roma" title="注音（罗马音）">音</button>' +
-      '<button type="button" data-aux="trans" title="译文">译</button>';
-    box.addEventListener('click', function (ev) {
-      var t = ev.target && ev.target.closest ? ev.target.closest('[data-aux]') : null;
-      if (!t) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      var want = t.getAttribute('data-aux');
-      mrSetLyricAuxMode(mrLyricAux.mode === want ? 'off' : want);
-    });
-    document.body.appendChild(box);
-    return box;
-  }
+  /* ===== v103：v99/v101 的「假名→罗马音」规则推导与 ±0.6s 最近时间贴行已整段删除，
+     注音改为只显示歌词文件自带的注音行，实现见下方 v103 区段。 ===== */
 
   /* ===== v100：在线歌词搜索提速 + 音/译按钮位置与显隐 ===== */
   function mrCleanLyricQuery(q) {
@@ -1756,278 +1666,1027 @@
   }
 
 
-  /* ===== v101：优先使用平台自带罗马音（netease romalrc / QQ roma） ===== */
-  var MR_ROMA_CACHE_KEY = 'mr-provider-roma-v1';
-  var mrRomaMem = null;
-  var mrRomaPending = Object.create(null);
+  /* ===== v103：音/译 —— 注音只显示歌词文件自带的注音行 =====
 
-  function mrRomaLoadCache() {
-    if (mrRomaMem) return mrRomaMem;
-    try { mrRomaMem = JSON.parse(localStorage.getItem(MR_ROMA_CACHE_KEY) || '{}') || {}; } catch (e) { mrRomaMem = {}; }
-    return mrRomaMem;
-  }
-  function mrRomaSaveCache(key, rec) {
-    try {
-      var c = mrRomaLoadCache();
-      c[key] = rec;
-      var keys = Object.keys(c);
-      if (keys.length > 160) keys.slice(0, keys.length - 160).forEach(function (k) { delete c[k]; });
-      localStorage.setItem(MR_ROMA_CACHE_KEY, JSON.stringify(c));
-    } catch (e) { }
-  }
-  function mrRomaSongKey(song) {
-    try {
-      var provider = String(typeof songProviderKey === 'function' ? songProviderKey(song) : (song.provider || song.source || ''));
-      if (provider === 'netease') return 'netease:' + (song.id || song.songId || '');
-      if (provider === 'qq') return 'qq:' + (song.mid || song.songmid || song.mediaMid || song.id || '');
-      return '';
-    } catch (e) { return ''; }
-  }
-  /* LRC -> {秒: 文本} */
-  function mrParseLrcMap(text) {
-    var map = {};
-    String(text || '').split(/\r?\n/).forEach(function (line) {
-      var m;
-      var re = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
-      var times = [];
-      while ((m = re.exec(line))) {
-        var sec = Number(m[1]) * 60 + Number(m[2]) + (m[3] ? Number(('0.' + m[3]).slice(0, 5)) : 0);
-        times.push(Math.round(sec * 1000) / 1000);
-      }
-      var rest = line.replace(/\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g, '').trim();
-      if (!rest || !times.length) return;
-      times.forEach(function (t) { map[String(t)] = rest; });
-    });
-    return map;
-  }
-  function mrBridgeGet(url, headers, timeoutMs) {
-    var bridge = window.__mrBridgeRequest;
-    if (typeof bridge !== 'function') return Promise.reject(new Error('NO_BRIDGE'));
-    return bridge({ url: url, method: 'GET', headers: headers || {}, timeoutMs: timeoutMs || 12000 });
-  }
-  function mrRomaFetchFromProvider(song) {
-    var key = mrRomaSongKey(song);
-    if (!key) return Promise.resolve(null);
-    var cached = mrRomaLoadCache()[key];
-    if (cached && cached.map && Object.keys(cached.map).length) return Promise.resolve(cached);
-    if (mrRomaPending[key]) return mrRomaPending[key];
-    var provider = key.split(':')[0];
-    var id = key.split(':').slice(1).join(':');
-    var task = Promise.resolve(null);
-    if (provider === 'netease' && id) {
-      var url = 'https://music.163.com/api/song/lyric?id=' + encodeURIComponent(id) + '&lv=-1&kv=-1&tv=-1&rv=1';
-      task = mrBridgeGet(url, { 'Referer': 'https://music.163.com/', 'User-Agent': navigator.userAgent }).then(function (res) {
-        var body = String((res && res.body) || '');
-        if (body.charCodeAt(0) === 0xFEFF) body = body.slice(1);
-        var data = JSON.parse(body);
-        var romaText = (data && data.romalrc && data.romalrc.lyric) || '';
-        if (!romaText) return null;
-        var map = mrParseLrcMap(romaText);
-        return Object.keys(map).length ? { map: map, source: 'netease-romalrc' } : null;
-      });
-    } else if (provider === 'qq' && id) {
-      var qurl = 'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=' + encodeURIComponent(id) +
-        '&format=json&nobase64=1&g_tk=5381&loginUin=0&hostUin=0&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0';
-      task = mrBridgeGet(qurl, { 'Referer': 'https://y.qq.com/', 'User-Agent': navigator.userAgent }).then(function (res) {
-        var body = String((res && res.body) || '');
-        body = body.replace(/^[^({]*\(/, '').replace(/\)\s*;?\s*$/, '');
-        var data = JSON.parse(body);
-        var romaText = (data && (data.roma || '')).toString() || '';
-        if (!romaText) return null;
-        var map = mrParseLrcMap(romaText);
-        return Object.keys(map).length ? { map: map, source: 'qq-roma' } : null;
-      });
-    }
-    task = task.catch(function () { return null; }).then(function (rec) {
-      delete mrRomaPending[key];
-      if (rec) mrRomaSaveCache(key, rec);
-      return rec;
-    });
-    mrRomaPending[key] = task;
-    return task;
-  }
-  /* 把平台罗马音按时间贴到歌词行上（返回新数组；没有可贴的返回 null） */
-  function mrApplyProviderRoma(lines, map) {
-    if (!map || !Object.keys(map).length) return null;
-    var keys = Object.keys(map);
-    var times = keys.map(Number).sort(function (a, b) { return a - b; });
-    function closest(t) {
-      var best = null, bestD = 9;
-      for (var i = 0; i < times.length; i++) {
-        var d = Math.abs(times[i] - t);
-        if (d < bestD) { bestD = d; best = times[i]; }
-        if (times[i] > t + 2) break;
-      }
-      return bestD <= 0.6 ? map[String(best)] : '';
-    }
-    var hit = 0;
-    var out = (lines || []).map(function (line) {
-      var copy = {};
-      for (var k in line) { if (Object.prototype.hasOwnProperty.call(line, k)) copy[k] = line[k]; }
-      var t = Number(copy.t != null ? copy.t : copy.time);
-      if (!isFinite(t)) t = 0;
-      var roma = closest(t);
-      if (roma) { copy.translation = roma; hit++; }
-      return copy;
-    });
-    return hit ? out : null;
-  }
-  function mrCurrentSongForRoma() {
+     用户口径（不可偏离）：歌词界面的「音」必须直接显示歌词文件里自带的注音行
+     （网易云 romalrc / yromalrc、QQ roma），按歌词文件自身行结构一行对一行挂在原文
+     下方，用宿主「译文」那套小字行渲染，原样显示文件内容（保留大小写/空格）。
+     v99/v101 的「假名→罗马音」规则表（MR_ROMA_TABLE / MR_ROMA_COMBOS /
+     mrKanaToRomaji / mrHasKana / mrApplyRomajiLines）与「±0.6s 最近时间贴行」
+     （mrApplyProviderRoma / mrParseLrcMap）已整段删除，不留兜底生成路径。
+
+     数据通路（全部走 App 内网 /api，不直连外网）：
+       宿主 /api/lyric（网易云：romalrc / yromalrc 字符串）
+       宿主 /api/qq/lyric（QQ：roma 字符串）
+       宿主 /api/kugou/lyric（酷狗：只有 lyric/trans，没有注音 → 隐藏「音」）
+         ↓ 在宿主 parseLyricResponseToOriginalState(song, response) 处截获同一份响应
+       按 song key 解析出 [{t, text}]（逐词时间标签合并为一整行；只去首尾空白）
+         ↓ 内存 + localStorage 缓存（7 天，最多 80 首）
+       与当前歌词行按「同一份歌词文件的时间标签」严格一对一配对
+       （① 时间戳完全相同；② 仅对未配上的行用 ±0.12s 唯一一对一补配；都不猜行）
+         ↓ 写进 line.translation（宿主小字行渲染用的字段）
+       宿主 setOriginalLyricsState + applyPreferredLyricsForCurrent 重绘；
+       fx.lyricTranslationMode（off/multi）控制小字行显示。
+     「音」与「译」互斥：开音时清掉宿主译文，关音恢复宿主原始译文状态；
+     没有注音→隐藏「音」，没有译文→隐藏「译」，都没有→整组消失。 */
+
+  var MR_AUX_MODE_KEY = 'mr-lyric-aux-mode-v2';
+  var MR_ROMA_CACHE_KEY = 'mr-lyric-roma-v3';
+  var MR_ROMA_CACHE_MAX = 80;
+  var MR_ROMA_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
+  var MR_ROMA_MISS_TTL = 10 * 60 * 1000;
+  var MR_AUX_TIGHT_TOL = 0.12;
+  var mrAux = {
+    mode: 'off',
+    state: null,
+    applying: false,
+    appliedSig: '',
+    romaMem: Object.create(null),
+    romaMissMem: Object.create(null),
+    romaPending: Object.create(null),
+    romaStore: null,
+    btnRoma: null,
+    btnTrans: null,
+    refreshTimer: 0,
+    applyTimer: 0,
+    version: 0
+  };
+
+  function mrAuxCurrentSong() {
     try {
       if (typeof currentLyricSong === 'function') return currentLyricSong();
+    } catch (e) { }
+    try {
       var q = window.playQueue || [];
-      return q[window.currentIdx] || null;
-    } catch (e) { return null; }
+      var i = typeof currentIdx === 'number' ? currentIdx : window.currentIdx;
+      return (i >= 0 && q[i]) ? q[i] : null;
+    } catch (e2) { return null; }
   }
-  /* 当前歌词状态下尝试用平台罗马音重绘 */
-  function mrApplyRomaForState(song) {
-    var st = mrLyricAux.state;
-    if (!st || mrLyricAux.mode !== 'roma') return;
-    var key = mrRomaSongKey(song || mrCurrentSongForRoma() || {});
-    var cached = key && mrRomaLoadCache()[key];
-    if (cached && cached.map) {
-      var withRoma = mrApplyProviderRoma(st.lines, cached.map);
-      if (withRoma) {
-        try {
-          var raw = st.__rawSet;
-          (window.setOriginalLyricsStateForRoma || window.setOriginalLyricsState)(withRoma, st.hasKaraoke, st.timingSource, st.translationLines, st.translationSource);
-          window.applyPreferredLyricsForCurrent(true);
-        } catch (e) { }
-        return;
-      }
-    }
-    /* 没缓存：异步拉一次，回来再重绘 */
-    var target = song || mrCurrentSongForRoma();
-    if (!target || !mrRomaSongKey(target)) return;
-    mrRomaFetchFromProvider(target).then(function (rec) {
-      if (!rec || mrLyricAux.mode !== 'roma') return;
-      var st2 = mrLyricAux.state;
-      if (!st2) return;
-      var withRoma2 = mrApplyProviderRoma(st2.lines, rec.map);
-      if (!withRoma2) return;
-      window.setOriginalLyricsState(withRoma2, st2.hasKaraoke, st2.timingSource, st2.translationLines, st2.translationSource);
-      try { window.applyPreferredLyricsForCurrent(true); } catch (e) { }
-    }).catch(function () { });
-  }
-
-  function mrLyricAuxAvailability() {
-    var st = mrLyricAux.state;
-    /* 优先用宿主当前歌词全局（切歌后最准），没有再用我们保存的原始歌词 */
-    var live = (window.lyricsLines && window.lyricsLines.length) ? window.lyricsLines : null;
-    var lines = live || (st && st.lines) || [];
-    var hasRoma = false;
-    var hasTrans = false;
+  function mrAuxSongKey(song) {
+    song = song || {};
     try {
-      hasRoma = lines.some(function (l) { return l && mrHasKana(l.text); });
-      hasTrans = !!((window.lyricsTranslationLines && window.lyricsTranslationLines.length) || (st && st.translationLines && st.translationLines.length));
-      if (!hasTrans) hasTrans = lines.some(function (l) { return l && String(l.translation || '').trim(); });
-    } catch (e) { }
-    return { roma: hasRoma, trans: hasTrans };
-  }
-  function mrPlaceLyricAux() {
-    var box = document.getElementById('mr-lyric-aux');
-    if (!box) return null;
-    var bar = document.getElementById('bottom-bar');
-    if (bar && box.parentElement !== bar) bar.appendChild(box);
-    return box;
-  }
-
-  function mrUpdateLyricAuxButtons() {
-    var box = mrPlaceLyricAux() || mrLyricAuxButtons();
-    var on = mrLyricAux.mode;
-    var av = mrLyricAuxAvailability();
-    box.classList.toggle('mr-aux-on-roma', on === 'roma');
-    box.classList.toggle('mr-aux-on-trans', on === 'trans');
-    var bRoma = box.querySelector('[data-aux="roma"]');
-    var bTrans = box.querySelector('[data-aux="trans"]');
-    if (bRoma) bRoma.style.display = av.roma ? '' : 'none';
-    if (bTrans) bTrans.style.display = av.trans ? '' : 'none';
-    var any = av.roma || av.trans;
-    var visible = any;
-    try { if (visible && !stageIsPlayerPage()) visible = false; } catch (e) { }
-    box.style.display = visible ? '' : 'none';
-    /* 都不支持时清掉模式，避免残留 */
-    if (!any && mrLyricAux.mode !== 'off') {
-      mrLyricAux.mode = 'off';
-      try { localStorage.setItem(MR_AUX_MODE_KEY, 'off'); } catch (e) { }
-    }
-  }
-  function mrSetLyricAuxMode(mode) {
-    if (mode !== 'roma' && mode !== 'trans') mode = 'off';
-    mrLyricAux.mode = mode;
-    try { localStorage.setItem(MR_AUX_MODE_KEY, mode); } catch (e) { }
-    try {
-      if (typeof window.setLyricTranslationMode === 'function') {
-        window.setLyricTranslationMode(mode === 'trans' ? 'dual' : 'off');
+      if (typeof persistentLyricCacheKey === 'function') {
+        var k = persistentLyricCacheKey(song);
+        if (k) return String(k);
       }
     } catch (e) { }
-    var st = mrLyricAux.state;
-    if (st) {
+    var provider = '';
+    try {
+      provider = String(typeof songProviderKey === 'function' ? songProviderKey(song) : (song.provider || song.source || ''));
+    } catch (e2) { provider = String(song.provider || song.source || ''); }
+    var id = song.id || song.mid || song.songmid || song.hash || '';
+    if (!provider && !id) return '';
+    return [provider, id, song.name || song.title || '', song.artist || ''].join('|');
+  }
+  function mrAuxCloneLine(line) {
+    var copy = {};
+    for (var k in line) {
+      if (Object.prototype.hasOwnProperty.call(line, k)) copy[k] = line[k];
+    }
+    if (line && Array.isArray(line.words)) {
+      copy.words = line.words.map(function (w) {
+        var n = {};
+        for (var k2 in w) { if (Object.prototype.hasOwnProperty.call(w, k2)) n[k2] = w[k2]; }
+        return n;
+      });
+    }
+    return copy;
+  }
+  function mrAuxCloneLines(lines) {
+    return (Array.isArray(lines) ? lines : []).map(mrAuxCloneLine);
+  }
+  function mrAuxPlayerPage() {
+    try { return document.body.classList.contains('mr-player-page'); } catch (e) { return false; }
+  }
+  function mrAuxToast(text) {
+    try { if (typeof window.showToast === 'function') window.showToast(text); } catch (e) { }
+  }
+
+  /* ---- 注音行解析：只做「取时间标签 + 把同一物理行的多个标签拼回一整行」，不改写内容 ---- */
+  function mrAuxRomaTextFromResponse(response) {
+    response = response || {};
+    function pick(value) {
+      if (!value) return '';
+      if (typeof value === 'string') return value;
+      if (typeof value === 'object') return String(value.lyric || value.text || value.content || '');
+      return '';
+    }
+    var table = [
+      ['netease-romalrc', response.romalrc],
+      ['qq-roma', response.roma],
+      ['netease-yromalrc', response.yromalrc]
+    ];
+    for (var i = 0; i < table.length; i += 1) {
+      var text = pick(table[i][1]);
+      if (!text) continue;
+      if (/\[\d{1,2}:\d{1,2}/.test(text) || /\[\d+,\d+\]/.test(text)) {
+        return { text: text, source: table[i][0] };
+      }
+    }
+    return { text: '', source: '' };
+  }
+  function mrAuxFinalizeRomaLines(lines) {
+    var out = [];
+    var seen = Object.create(null);
+    (lines || []).forEach(function (line) {
+      var t = Number(line && line.t);
+      var text = String((line && line.text) || '').replace(/^\s+|\s+$/g, '');
+      if (!isFinite(t) || t < 0 || !text) return;
+      var ms = Math.round(t * 1000);
+      if (seen[ms]) return;
+      seen[ms] = 1;
+      out.push({ t: ms / 1000, text: text });
+    });
+    out.sort(function (a, b) { return a.t - b.t; });
+    return out;
+  }
+  function mrParseRomaText(text) {
+    var raw = String(text || '');
+    if (!raw) return [];
+    /* ① YRC / QRC 风格（[起始ms,时长ms](偏移,时长,0)字…）：交给宿主 parseYrcText 拼回整行 */
+    if (/\[\d+,\d+\]/.test(raw) && typeof window.parseYrcText === 'function') {
       try {
-        window.setOriginalLyricsState(
-          mode === 'roma' ? mrApplyRomajiLines(st.lines) : st.lines,
-          st.hasKaraoke, st.timingSource, st.translationLines, st.translationSource
-        );
-        window.applyPreferredLyricsForCurrent(true);
+        var yrcLines = window.parseYrcText(raw) || [];
+        var out = [];
+        yrcLines.forEach(function (line) {
+          if (line && line.text) out.push({ t: Number(line.t) || 0, text: String(line.text) });
+        });
+        if (out.length) return mrAuxFinalizeRomaLines(out);
       } catch (e) { }
-      if (mode === 'roma') {
-        /* 先用假名转换兜底，再异步换成平台自带的罗马音 */
-        try { mrApplyRomaForState(mrCurrentSongForRoma()); } catch (e) { }
-      }
     }
-    mrUpdateLyricAuxButtons();
-    if (typeof window.showToast === 'function') {
-      if (mode === 'roma') {
-        var has = false;
-        try { has = (st ? st.lines : []).some(function (l) { return mrHasKana(l && l.text); }); } catch (e) { }
-        window.showToast(has ? '已显示注音（罗马音）' : '这首歌没有日文假名，无法注音');
-      } else if (mode === 'trans') {
-        window.showToast('已显示译文（需要歌词自带翻译）');
-      } else {
-        window.showToast('已关闭音/译');
+    /* ② LRC 风格：同一物理行里可能带多个时间标签（逐词/分段打标签），必须拼回一整行 */
+    var parsed = [];
+    var tagReg = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+    String(raw).split(/\r?\n/).forEach(function (line) {
+      var tags = [];
+      var m;
+      tagReg.lastIndex = 0;
+      while ((m = tagReg.exec(line))) {
+        var t = (parseInt(m[1], 10) || 0) * 60 + (parseInt(m[2], 10) || 0);
+        if (m[3]) t += (parseInt(m[3], 10) || 0) / Math.pow(10, Math.min(3, m[3].length));
+        tags.push({ t: t, start: m.index, end: tagReg.lastIndex });
       }
-    }
+      if (!tags.length) return;
+      var segs = [];
+      for (var i = 0; i < tags.length; i += 1) {
+        var seg = line.slice(tags[i].end, i + 1 < tags.length ? tags[i + 1].start : line.length);
+        seg = seg.replace(/^\s+|\s+$/g, '');
+        if (seg) segs.push(seg);
+      }
+      var full = segs.join(' ');
+      if (!full) return;
+      parsed.push({ t: tags[0].t, text: full });
+    });
+    return mrAuxFinalizeRomaLines(parsed);
   }
 
-  function patchLyricAux() {
-    if (window.__mrLyricAuxPatched) return true;
-    if (typeof window.setOriginalLyricsState !== 'function' || typeof window.applyPreferredLyricsForCurrent !== 'function') return false;
-    window.__mrLyricAuxPatched = 1;
-    try {
-      var saved = localStorage.getItem(MR_AUX_MODE_KEY);
-      if (saved === 'roma' || saved === 'trans') mrLyricAux.mode = saved;
-    } catch (e) { }
-    var rawSet = window.setOriginalLyricsState;
-    window.setOriginalLyricsState = function (lines, hasKaraoke, timingSource, translationLines, translationSource) {
-      var safeLines = Array.isArray(lines) ? lines : [];
-      mrLyricAux.state = {
-        lines: JSON.parse(JSON.stringify(safeLines)),
-        hasKaraoke: hasKaraoke,
-        timingSource: timingSource,
-        translationLines: Array.isArray(translationLines) ? JSON.parse(JSON.stringify(translationLines)) : [],
-        translationSource: translationSource
-      };
-      var useLines = safeLines;
-      if (mrLyricAux.mode === 'roma') {
-        var romaKey = mrRomaSongKey(mrCurrentSongForRoma() || {});
-        var romaCached = romaKey && mrRomaLoadCache()[romaKey];
-        var romaLines = romaCached && romaCached.map ? mrApplyProviderRoma(safeLines, romaCached.map) : null;
-        useLines = romaLines || mrApplyRomajiLines(safeLines);
+  /* ---- 注音缓存（内存 + localStorage；按 song key，TTL 7 天） ---- */
+  function mrAuxStoreLoad() {
+    if (mrAux.romaStore) return mrAux.romaStore;
+    var data = null;
+    try { data = JSON.parse(window.localStorage.getItem(MR_ROMA_CACHE_KEY) || '{}'); } catch (e) { data = null; }
+    mrAux.romaStore = (data && typeof data === 'object') ? data : {};
+    return mrAux.romaStore;
+  }
+  function mrAuxStoreGet(key) {
+    if (!key) return null;
+    var store = mrAuxStoreLoad();
+    var item = store[key];
+    if (!item || !item.l || !item.l.length) return null;
+    if (item.at && Date.now() - item.at > MR_ROMA_CACHE_TTL) { delete store[key]; return null; }
+    var lines = [];
+    for (var i = 0; i < item.l.length; i += 1) {
+      var pair = item.l[i];
+      if (!pair || pair.length < 2) continue;
+      var t = Number(pair[0]);
+      var text = String(pair[1] || '').replace(/^\s+|\s+$/g, '');
+      if (!isFinite(t) || !text) continue;
+      lines.push({ t: t, text: text });
+    }
+    if (lines.length < 2) return null;
+    var lrcLines = [];
+    if (Array.isArray(item.lt)) {
+      for (var j = 0; j < item.lt.length; j += 1) {
+        var lpair = item.lt[j];
+        if (!lpair || lpair.length < 2) continue;
+        var lt = Number(lpair[0]);
+        var ltext = String(lpair[1] || '').replace(/^s+|s+$/g, '');
+        if (!isFinite(lt) || !ltext) continue;
+        lrcLines.push({ t: lt, text: ltext });
       }
-      var r = rawSet.call(this, useLines, hasKaraoke, timingSource, translationLines, translationSource);
-      try { window.setTimeout(mrUpdateLyricAuxButtons, 30); } catch (e) { }
-      if (mrLyricAux.mode === 'roma') {
-        try { window.setTimeout(function () { mrApplyRomaForState(mrCurrentSongForRoma()); }, 60); } catch (e) { }
-      }
-      return r;
+    }
+    return { key: key, source: item.s || 'roma', lines: lines, lrcLines: lrcLines, at: item.at || 0 };
+  }
+  function mrAuxStorePut(key, rec) {
+    if (!key || !rec || !rec.lines || rec.lines.length < 2) return;
+    var store = mrAuxStoreLoad();
+    store[key] = {
+      s: rec.source || 'roma',
+      at: Date.now(),
+      l: rec.lines.map(function (line) {
+        return [Math.round((Number(line.t) || 0) * 1000) / 1000, String(line.text || '')];
+      }),
+      lt: (rec.lrcLines || []).map(function (line) {
+        return [Math.round((Number(line.t) || 0) * 1000) / 1000, String(line.text || '')];
+      })
     };
-    /* 进播放页/换歌后刷新按钮可见性与状态 */
-    document.addEventListener('click', function () { window.setTimeout(mrUpdateLyricAuxButtons, 320); }, true);
-    window.setInterval(function () { try { mrUpdateLyricAuxButtons(); } catch (e) { } }, 1000);
-    mrUpdateLyricAuxButtons();
+    try {
+      var keys = Object.keys(store);
+      if (keys.length > MR_ROMA_CACHE_MAX) {
+        keys.sort(function (a, b) { return (store[a] && store[a].at) - (store[b] && store[b].at); });
+        var drop = keys.length - MR_ROMA_CACHE_MAX;
+        for (var i = 0; i < drop; i += 1) delete store[keys[i]];
+      }
+      window.localStorage.setItem(MR_ROMA_CACHE_KEY, JSON.stringify(store));
+    } catch (e) {
+      /* 配额满了先丢本地持久化，内存里还有，不影响本次会话 */
+      try { mrAux.romaStore = store; } catch (e2) { }
+    }
+  }
+  function mrAuxRomaRec(key) {
+    if (!key) return null;
+    if (mrAux.romaMem[key]) return mrAux.romaMem[key];
+    var rec = mrAuxStoreGet(key);
+    if (rec) mrAux.romaMem[key] = rec;
+    return rec || null;
+  }
+  function mrAuxMissSet(key) {
+    if (key) mrAux.romaMissMem[key] = Date.now();
+  }
+  function mrAuxMissed(key) {
+    var at = key && mrAux.romaMissMem[key];
+    return !!(at && Date.now() - at < MR_ROMA_MISS_TTL);
+  }
+
+  /* ---- 从宿主歌词响应里截获注音（唯一来源；绝不由原文推导） ---- */
+  function mrAuxCaptureRoma(song, response) {
+    var key = mrAuxSongKey(song);
+    if (!key || !response) return null;
+    var found = mrAuxRomaTextFromResponse(response);
+    if (!found.text) return null;
+    var lines = mrParseRomaText(found.text);
+    if (lines.length < 2) return null;
+    var lrcLines = [];
+    try {
+      var lrcRaw = '';
+      if (response) {
+        if (typeof response.lyric === 'string') lrcRaw = response.lyric;
+        else if (response.lyric && typeof response.lyric.lyric === 'string') lrcRaw = response.lyric.lyric;
+        if (!lrcRaw && response.lrc && typeof response.lrc.lyric === 'string') lrcRaw = response.lrc.lyric;
+      }
+      if (lrcRaw && typeof window.parseLyricText === 'function') lrcLines = window.parseLyricText(lrcRaw);
+    } catch (e) { lrcLines = []; }
+    var rec = {
+      key: key,
+      source: found.source,
+      lines: lines,
+      lrcLines: Array.isArray(lrcLines) ? lrcLines : [],
+      at: Date.now()
+    };
+    mrAux.romaMem[key] = rec;
+    mrAuxStorePut(key, rec);
+    delete mrAux.romaMissMem[key];
+    var st = mrAux.state;
+    if (st && st.key === key && mrAux.mode === 'roma') {
+      st.romaChecked = false;
+      st.roma = undefined;
+      mrAuxScheduleApply(0);
+    }
+    return rec;
+  }
+  function mrAuxHookParse() {
+    if (window.__mrLyricAuxParseHooked) return true;
+    if (typeof window.parseLyricResponseToOriginalState !== 'function') return false;
+    window.__mrLyricAuxParseHooked = 1;
+    var rawParse = window.parseLyricResponseToOriginalState;
+    window.parseLyricResponseToOriginalState = function (song, response) {
+      var state = rawParse.apply(this, arguments);
+      try { mrAuxCaptureRoma(song, response); } catch (e) { }
+      return state;
+    };
     return true;
   }
 
+  function mrAuxTextKey(text) {
+      return String(text || '').replace(/\s+/g, ' ').trim();
+    }
+    /* 假名骨架：同一句词在「YRC 主歌词」和「LRC 注音源歌词」里可能只是繁体/简体/异体字不同
+       （例：神話/神话、蒼い/苍い），把汉字等非假名全部剔掉后骨架相同 → 认定为同一行。
+       这只是在「同一首歌的两份歌词文本」之间找同一行，不参与任何注音内容生成。 */
+    function mrAuxKanaKey(text) {
+      var s = String(text || '');
+      var out = '';
+      for (var i = 0; i < s.length; i += 1) {
+        var code = s.charCodeAt(i);
+        if (code >= 0x3040 && code <= 0x30ff && s.charAt(i) !== '\u30fc') out += s.charAt(i);
+      }
+      return out;
+    }
+    /* ---- 严格一对一配对：注音行 ↔ 原歌词行（配对依据=歌词文件自身结构） ----
+       ① 主歌词是 LRC 时：romalrc/roma 与 lrc 同一份文件、时间戳完全相同 → 按时间戳 1:1；
+       ② 主歌词是 YRC（逐字，行首时间比 lrc 晚 0.1~0.3s）时：用同一份响应里的 lrc 行做中转，
+          先把注音按时间戳贴到 lrc 行（同一份文件，仍然 1:1），再把 lrc 行对到 yrc 行：
+          ②-0 两边行数相同 → 按行序平移；②-1 整行文字相同；②-1b 假名骨架相同；
+          ②-2 剩下按 ±0.45s 唯一就近补，仍要求一对一；
+       ③ 最后才允许 ±0.12s 唯一一对一（时间取整差异）。
+       全程不做「按顺序猜行」的注音内容推导，配不上就留空，比例不足 50% 就不显示「音」。 */
+    function mrAlignRomaToLines(lines, romaLines, source, lrcLines) {
+      var base = Array.isArray(lines) ? lines : [];
+      var roma = Array.isArray(romaLines) ? romaLines : [];
+      if (base.length < 2 || roma.length < 2) return null;
+      var romaByMs = Object.create(null);
+      for (var r0 = 0; r0 < roma.length; r0 += 1) {
+        var key0 = Math.round((Number(roma[r0].t) || 0) * 1000);
+        if (!romaByMs[key0]) romaByMs[key0] = roma[r0];
+      }
+      var candidates = [];
+      for (var i = 0; i < base.length; i += 1) {
+        var line = base[i];
+        if (!line || line.fallback) continue;
+        var baseText = mrAuxTextKey(line.text);
+        if (!baseText) continue;
+        if (typeof window.isLyricCreditLineText === 'function') {
+          try { if (window.isLyricCreditLineText(baseText)) continue; } catch (e) { }
+        }
+        candidates.push(i);
+      }
+      if (candidates.length < 2) return null;
+      var assign = Object.create(null);
+      var hits = 0;
+      var phase = 'exact';
+      function accept(idx, text) {
+        var value = String(text || '').replace(/^\s+|\s+$/g, '');
+        if (!value) return false;
+        /* 注音行与原文完全同一句话（非日文歌的 romalrc 常见）→ 不算注音，宁可不显示 */
+        if (mrAuxTextKey(value) === mrAuxTextKey(base[idx].text)) return false;
+        assign[idx] = value;
+        hits += 1;
+        return true;
+      }
+      /* ① 时间戳完全相同 */
+      var usedMs = Object.create(null);
+      for (var c = 0; c < candidates.length; c += 1) {
+        var idx = candidates[c];
+        var ms = Math.round((Number(base[idx].t) || 0) * 1000);
+        if (usedMs[ms]) continue;
+        var hit = romaByMs[ms];
+        if (hit && accept(idx, hit.text)) usedMs[ms] = 1;
+      }
+      /* ② 主歌词是 YRC：借同一份文件的 lrc 行做中转 */
+      if (hits < candidates.length * 0.5 && Array.isArray(lrcLines) && lrcLines.length >= 2) {
+        var lrcRoma = [];
+        var lrcTextMap = Object.create(null);
+        var lrcKanaMap = Object.create(null);
+        for (var li = 0; li < lrcLines.length; li += 1) {
+          var lline = lrcLines[li] || {};
+          var lMs = Math.round((Number(lline.t) || 0) * 1000);
+          var rHit = romaByMs[lMs];
+          if (rHit) {
+            var rText = String(rHit.text || '').replace(/^\s+|\s+$/g, '');
+            if (rText && mrAuxTextKey(rText) !== mrAuxTextKey(lline.text)) lrcRoma[li] = rText;
+          }
+          var lKey = mrAuxTextKey(lline.text);
+          if (lKey) lrcTextMap[lKey] = Object.prototype.hasOwnProperty.call(lrcTextMap, lKey) ? -1 : li;
+          var lKana = mrAuxKanaKey(lline.text);
+          if (lKana.length >= 2) lrcKanaMap[lKana] = Object.prototype.hasOwnProperty.call(lrcKanaMap, lKana) ? -1 : li;
+        }
+        var usedLrc = Object.create(null);
+        /* ②-0 两份时间轴行数相同（同一份歌词文件的两个版本）→ 按行序 1:1 平移 */
+        if (lrcLines.length === candidates.length) {
+          var agree = 0;
+          var checked = 0;
+          for (var pi = 0; pi < candidates.length; pi += 1) {
+            if (!lrcRoma[pi]) continue;
+            checked += 1;
+            var bKana = mrAuxKanaKey(base[candidates[pi]].text);
+            var lKana = mrAuxKanaKey(lrcLines[pi].text);
+            if (!bKana || !lKana || bKana === lKana) agree += 1;
+          }
+          if (checked >= 2 && agree >= checked * 0.6) {
+            for (var pj = 0; pj < candidates.length; pj += 1) {
+              var pIdx = candidates[pj];
+              if (assign[pIdx] || !lrcRoma[pj]) continue;
+              if (accept(pIdx, lrcRoma[pj])) usedLrc[pj] = 1;
+            }
+            phase = 'lrc-parallel';
+          }
+        }
+        /* ②-1 整行文字相同 → 同一句词 */
+        for (var c2 = 0; c2 < candidates.length; c2 += 1) {
+          var idx2 = candidates[c2];
+          if (assign[idx2]) continue;
+          var lKey2 = mrAuxTextKey(base[idx2].text);
+          var lIdx = lrcTextMap[lKey2];
+          if (lIdx == null || lIdx < 0 || usedLrc[lIdx] || !lrcRoma[lIdx]) continue;
+          if (accept(idx2, lrcRoma[lIdx])) { usedLrc[lIdx] = 1; if (phase === 'exact') phase = 'lrc-text'; }
+        }
+        /* ②-1b 假名骨架相同（繁体/简体/异体差异） */
+        for (var c2b = 0; c2b < candidates.length; c2b += 1) {
+          var idx2b = candidates[c2b];
+          if (assign[idx2b]) continue;
+          var bKana2 = mrAuxKanaKey(base[idx2b].text);
+          if (bKana2.length < 2) continue;
+          var lIdx2 = lrcKanaMap[bKana2];
+          if (lIdx2 == null || lIdx2 < 0 || usedLrc[lIdx2] || !lrcRoma[lIdx2]) continue;
+          if (accept(idx2b, lrcRoma[lIdx2])) { usedLrc[lIdx2] = 1; if (phase === 'exact') phase = 'lrc-kana'; }
+        }
+        /* ②-2 剩下按 ±0.45s 唯一一对一（同一首歌的两条时间轴） */
+        for (var c3 = 0; c3 < candidates.length; c3 += 1) {
+          var idx3 = candidates[c3];
+          if (assign[idx3]) continue;
+          var baseT = Number(base[idx3].t) || 0;
+          var best = -1;
+          var bestDelta = 0.46;
+          for (var q = 0; q < lrcLines.length; q += 1) {
+            if (usedLrc[q] || !lrcRoma[q]) continue;
+            var delta = Math.abs((Number(lrcLines[q].t) || 0) - baseT);
+            if (delta < bestDelta) { bestDelta = delta; best = q; }
+          }
+          if (best < 0) continue;
+          var backCount = 0;
+          var backIdx = -1;
+          for (var c4 = 0; c4 < candidates.length; c4 += 1) {
+            if (assign[candidates[c4]]) continue;
+            if (Math.abs((Number(base[candidates[c4]].t) || 0) - (Number(lrcLines[best].t) || 0)) < 0.46) {
+              backCount += 1;
+              backIdx = candidates[c4];
+            }
+          }
+          if (backCount !== 1 || backIdx !== idx3) continue;
+          if (accept(idx3, lrcRoma[best])) { usedLrc[best] = 1; if (phase === 'exact' || phase === 'lrc-text' || phase === 'lrc-kana') phase = 'lrc-time'; }
+        }
+      }
+      /* ③ ±0.12s 唯一一对一（时间取整差异），仍然不按顺序猜行 */
+      if (hits < candidates.length) {
+        var usedRoma = Object.create(null);
+        for (var c5 = 0; c5 < candidates.length; c5 += 1) {
+          var idx5 = candidates[c5];
+          if (assign[idx5]) continue;
+          var t5 = Number(base[idx5].t) || 0;
+          var best5 = -1;
+          var bestDelta5 = MR_AUX_TIGHT_TOL + 1;
+          for (var r5 = 0; r5 < roma.length; r5 += 1) {
+            if (usedRoma[r5]) continue;
+            var d5 = Math.abs((Number(roma[r5].t) || 0) - t5);
+            if (d5 <= MR_AUX_TIGHT_TOL && d5 < bestDelta5) { bestDelta5 = d5; best5 = r5; }
+          }
+          if (best5 < 0) continue;
+          var backCount5 = 0;
+          var backIdx5 = -1;
+          for (var b5 = 0; b5 < candidates.length; b5 += 1) {
+            if (Math.abs((Number(roma[best5].t) || 0) - (Number(base[candidates[b5]].t) || 0)) <= MR_AUX_TIGHT_TOL) {
+              backCount5 += 1;
+              backIdx5 = candidates[b5];
+            }
+          }
+          if (backCount5 !== 1 || backIdx5 !== idx5) continue;
+          if (accept(idx5, roma[best5].text)) { usedRoma[best5] = 1; if (phase === 'exact') phase = 'tight'; }
+        }
+      }
+      if (hits < 2) return null;
+      var ratio = hits / candidates.length;
+      if (ratio < 0.5) return null;
+      return {
+        assign: assign,
+        hits: hits,
+        candidates: candidates.length,
+        ratio: ratio,
+        phase: phase,
+        source: source || 'roma'
+      };
+    }
+
+  /* ---- 基础歌词状态（宿主每次 setOriginalLyricsState 都留一份，音/译都从它重建） ---- */
+  function mrAuxCaptureBase(lines, hasKaraoke, timingSource, translationLines, translationSource) {
+    var safeLines = Array.isArray(lines) ? lines : [];
+    var song = mrAuxCurrentSong();
+    var key = mrAuxSongKey(song);
+    mrAux.version += 1;
+    mrAux.state = {
+      key: key,
+      version: mrAux.version,
+      lines: mrAuxCloneLines(safeLines),
+      hasKaraoke: !!hasKaraoke,
+      timingSource: timingSource || 'fallback',
+      translationLines: mrAuxCloneLines(Array.isArray(translationLines) ? translationLines : []),
+      translationSource: translationSource || 'none',
+      roma: undefined,
+      romaChecked: false,
+      romaFetching: 0
+    };
+    return mrAux.state;
+  }
+  function mrAuxAdoptHostState() {
+    var st = mrAux.state;
+    if (st && st.lines && st.lines.length) return false;
+    var host = null;
+    try { host = window.originalLyricsState; } catch (e) { host = null; }
+    if (!host || !Array.isArray(host.lines) || !host.lines.length) return false;
+    mrAuxCaptureBase(host.lines, host.hasNativeKaraoke, host.timingSource, host.translationLines, host.translationSource);
+    mrAuxApplyNow(true);
+    return true;
+  }
+  function mrAuxAlignedRoma(st) {
+    st = st || mrAux.state;
+    if (!st || !st.lines || st.lines.length < 2) return null;
+    if (st.romaChecked) return st.roma;
+    st.romaChecked = true;
+    st.roma = null;
+    var rec = st.key ? mrAuxRomaRec(st.key) : null;
+    if (rec) st.roma = mrAlignRomaToLines(st.lines, rec.lines, rec.source, rec.lrcLines);
+    if (!st.roma && st.key && mrAuxLooksJapanese(st) && !mrAuxMissed(st.key)) mrAuxKickRomaFetch(st);
+    return st.roma;
+  }
+  function mrAuxHasTranslation(st) {
+    st = st || mrAux.state;
+    if (!st) return false;
+    if (st.translationLines && st.translationLines.length) return true;
+    return (st.lines || []).some(function (line) { return !!(line && String(line.translation || '').trim()); });
+  }
+  function mrAuxEffectiveMode(st) {
+    st = st || mrAux.state;
+    if (!st || !st.lines || !st.lines.length) return 'off';
+    try { if (String(window.lyricSourceMode || '') === 'custom') return 'off'; } catch (e) { }
+    if (mrAux.mode === 'roma') {
+      var aligned = mrAuxAlignedRoma(st);
+      return (aligned && aligned.hits >= 2 && aligned.ratio >= 0.5) ? 'roma' : 'off';
+    }
+    if (mrAux.mode === 'trans') {
+      return mrAuxHasTranslation(st) ? 'trans' : 'off';
+    }
+    return 'off';
+  }
+
+  /* ---- 注音取数 ----
+     Android 包内 /api/lyric 的 shim 实现（assets/public/js/ported/ref/netease.js）只回
+     lyric/tlyric/yrc，romalrc/yromalrc 在服务端就被丢了（桌面 server.js 才带）；
+     所以这里用 App 自带的 __mrBridgeRequest（原生 HTTP，走同一个网易云接口、同一份歌词文件）
+     取回 romalrc —— 只取「文件里自带的注音行」，不做任何规则推导。
+     若以后宿主 shim 补齐了 romalrc，parse 截获路径会优先命中，这里只是兜底。 */
+  function mrAuxProviderOf(song) {
+    song = song || {};
+    try { if (typeof songProviderKey === 'function') return String(songProviderKey(song) || ''); } catch (e) { }
+    return String(song.provider || song.source || '');
+  }
+  function mrAuxBridgeGet(url, headers, timeoutMs) {
+    var bridge = window.__mrBridgeRequest;
+    if (typeof bridge !== 'function') return Promise.reject(new Error('NO_BRIDGE'));
+    return Promise.resolve(bridge({ url: url, method: 'GET', headers: headers || {}, timeoutMs: timeoutMs || 12000 }));
+  }
+  function mrAuxLooksJapanese(st) {
+    var lines = (st && st.lines) || [];
+    for (var i = 0; i < lines.length; i += 1) {
+      if (/[\u3040-\u30ff]/.test(String((lines[i] && lines[i].text) || ''))) return true;
+    }
+    return false;
+  }
+  function mrAuxFetchRomaViaBridge(song) {
+    var provider = mrAuxProviderOf(song);
+    if (provider === 'netease') {
+      var id = (song && (song.id || song.songId)) || '';
+      if (!id) return Promise.resolve(null);
+      var url = 'https://music.163.com/api/song/lyric?id=' + encodeURIComponent(id) + '&lv=-1&kv=-1&tv=-1&rv=1';
+      return mrAuxBridgeGet(url, { 'Referer': 'https://music.163.com/', 'User-Agent': navigator.userAgent }).then(function (res) {
+        var body = String((res && res.body) || '');
+        if (body.charCodeAt(0) === 0xFEFF) body = body.slice(1);
+        var data = JSON.parse(body);
+        return mrAuxCaptureRoma(song, data || {});
+      });
+    }
+    if (provider === 'qq') {
+      var mid = (song && (song.mid || song.songmid || song.mediaMid)) || '';
+      if (!mid) return Promise.resolve(null);
+      var qurl = 'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=' + encodeURIComponent(mid) +
+        '&format=json&nobase64=1&g_tk=5381&loginUin=0&hostUin=0&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0';
+      return mrAuxBridgeGet(qurl, { 'Referer': 'https://y.qq.com/', 'User-Agent': navigator.userAgent }).then(function (res) {
+        var body = String((res && res.body) || '');
+        body = body.replace(/^[^({]*\(/, '').replace(/\)\s*;?\s*$/, '');
+        var data = JSON.parse(body);
+        return mrAuxCaptureRoma(song, data || {});
+      });
+    }
+    return Promise.resolve(null);
+  }
+  /* ---- 缺注音时按 song key 补取一次（先 bridge 取文件注音，再宿主 /api 兜底） ---- */
+  function mrAuxFetchRoma(st) {
+    var key = st && st.key;
+    if (!key) return Promise.resolve(null);
+    if (mrAux.romaPending[key]) return mrAux.romaPending[key];
+    var song = mrAuxCurrentSong();
+    if (!song || mrAuxSongKey(song) !== key) return Promise.resolve(null);
+    var endpoint = '';
+    try {
+      if (typeof lyricEndpointForSong === 'function') endpoint = lyricEndpointForSong(song);
+    } catch (e) { endpoint = ''; }
+    if (!endpoint || typeof window.apiJson !== 'function') return Promise.resolve(null);
+    var task = Promise.resolve()
+      .then(function () { return mrAuxFetchRomaViaBridge(song); })
+      .catch(function () { return null; })
+      .then(function (rec) {
+        if (rec) return rec;
+        return Promise.resolve(window.apiJson(endpoint, { timeoutMs: 6500 }))
+          .then(function (data) { return mrAuxCaptureRoma(song, data || {}); })
+          .catch(function () { return null; });
+      })
+      .then(function (rec) {
+        if (!rec) mrAuxMissSet(key);
+        delete mrAux.romaPending[key];
+        return rec;
+      });
+    mrAux.romaPending[key] = task;
+    return task;
+  }
+  function mrAuxKickRomaFetch(st) {
+    if (!st || !st.key || st.romaFetching) return;
+    if (mrAux.romaPending[st.key]) return;
+    st.romaFetching = 1;
+    var version = st.version;
+    mrAuxFetchRoma(st).then(function (rec) {
+      st.romaFetching = 0;
+      if (mrAux.state !== st || st.version !== version) return;
+      if (!rec) { mrAuxRefresh(); return; }
+      st.romaChecked = false;
+      st.roma = undefined;
+      var aligned = mrAuxAlignedRoma(st);
+      if (!aligned) { mrAuxRefresh(); return; }
+      if (mrAux.mode === 'roma' && mrAuxPlayerPage()) mrAuxApplyNow(true);
+      else mrAuxRefresh();
+    }).catch(function () { st.romaFetching = 0; });
+  }
+
+  /* ---- 把选中的 aux 文本写回宿主渲染通道 ---- */
+  function mrAuxSetHostTranslationMode(mode) {
+    mode = mode === 'multi' ? 'multi' : 'off';
+    var current = 'off';
+    try { current = String((window.fx && window.fx.lyricTranslationMode) || 'off'); } catch (e) { current = 'off'; }
+    if (current === mode) return false;
+    try { if (window.fx) window.fx.lyricTranslationMode = mode; } catch (e) { }
+    try {
+      if (typeof window.updateLyricTranslationModeControls === 'function') window.updateLyricTranslationModeControls();
+    } catch (e2) { }
+    return true;
+  }
+  function mrAuxRomaState(st) {
+    var assign = (st && st.roma && st.roma.assign) || {};
+    var lines = [];
+    var translationLines = [];
+    var src = (st && st.lines) || [];
+    for (var i = 0; i < src.length; i += 1) {
+      var line = src[i] || {};
+      var copy = mrAuxCloneLine(line);
+      if (Object.prototype.hasOwnProperty.call(assign, i)) {
+        copy.translation = assign[i];
+      } else {
+        /* 音/译互斥：开音时不能把宿主译文顺带塞进来 */
+        delete copy.translation;
+        delete copy.translationTime;
+        delete copy.translationSource;
+        delete copy.translationMatch;
+      }
+      lines.push(copy);
+      if (Object.prototype.hasOwnProperty.call(assign, i)) {
+        translationLines.push({
+          t: Number(line.t) || 0,
+          duration: Number(line.duration) || 0,
+          text: assign[i],
+          source: 'roma'
+        });
+      }
+    }
+    return { lines: lines, translationLines: translationLines };
+  }
+  /* 译文：宿主的 tlyric 正常已在 base.lines 的 .translation 上；个别路径只给了 translationLines，
+     这里用宿主自己的 attachLyricTranslations 补挂一次（仍是文件自带译文，不做生成） */
+  function mrAuxTransState(st) {
+    var lines = st.lines;
+    var translationLines = st.translationLines || [];
+    var attached = (st.lines || []).some(function (line) { return !!(line && line.translation); });
+    if (!attached && translationLines.length && typeof window.attachLyricTranslations === 'function') {
+      try { lines = window.attachLyricTranslations(mrAuxCloneLines(st.lines), mrAuxCloneLines(translationLines)); } catch (e) { lines = st.lines; }
+    }
+    return { lines: lines, translationLines: translationLines, translationSource: st.translationSource || 'translation' };
+  }
+  function mrAuxSig(st, effective) {
+    var romaPart = '';
+    if (effective === 'roma' && st && st.roma) {
+      romaPart = [st.roma.phase, st.roma.hits, st.roma.source].join(':');
+    }
+    return [st && st.version, effective, romaPart].join('|');
+  }
+  function mrAuxWriteHost(effective, options) {
+    options = options || {};
+    var st = mrAux.state;
+    if (!st) return false;
+    var wantMode = effective === 'off' ? 'off' : 'multi';
+    var modeChanged = mrAuxSetHostTranslationMode(wantMode);
+    var lines = st.lines;
+    var translationLines = st.translationLines || [];
+    var translationSource = st.translationSource || 'none';
+    if (effective === 'roma') {
+      var built = mrAuxRomaState(st);
+      lines = built.lines;
+      translationLines = built.translationLines;
+      translationSource = 'roma:' + ((st.roma && st.roma.source) || 'file');
+    } else if (effective === 'trans') {
+      var transState = mrAuxTransState(st);
+      lines = transState.lines;
+      translationLines = transState.translationLines;
+      translationSource = transState.translationSource;
+    }
+    mrAux.applying = true;
+    try {
+      if (typeof window.setOriginalLyricsState === 'function') {
+        window.setOriginalLyricsState(lines, st.hasKaraoke, st.timingSource, translationLines, translationSource);
+        if (options.render !== false && typeof window.applyPreferredLyricsForCurrent === 'function') {
+          window.applyPreferredLyricsForCurrent(true);
+        }
+      }
+    } finally {
+      mrAux.applying = false;
+    }
+    mrAux.appliedSig = mrAuxSig(st, effective);
+    if (modeChanged && options.render !== false && typeof window.refreshStageLyricDisplayMode === 'function') {
+      try { window.refreshStageLyricDisplayMode(); } catch (e) { }
+    }
+    return true;
+  }
+  function mrAuxApplyNow(force) {
+    var st = mrAux.state;
+    if (!st || !st.lines || !st.lines.length) {
+      mrAuxSetHostTranslationMode('off');
+      mrAux.appliedSig = '';
+      mrAuxRefresh();
+      return;
+    }
+    if (!mrAuxPlayerPage()) { mrAuxRefresh(); return; }
+    var effective = mrAuxEffectiveMode(st);
+    var wantMode = effective === 'off' ? 'off' : 'multi';
+    var hostMode = 'off';
+    try { hostMode = String((window.fx && window.fx.lyricTranslationMode) || 'off'); } catch (e) { hostMode = 'off'; }
+    var sig = mrAuxSig(st, effective);
+    if (!force && sig === mrAux.appliedSig && hostMode === wantMode) { mrAuxRefresh(); return; }
+    mrAuxWriteHost(effective, { render: true });
+    mrAuxRefresh();
+  }
+  function mrAuxScheduleApply(delay) {
+    try {
+      if (mrAux.applyTimer) window.clearTimeout(mrAux.applyTimer);
+      mrAux.applyTimer = window.setTimeout(function () {
+        mrAux.applyTimer = 0;
+        try { mrAuxApplyNow(false); } catch (e) { }
+      }, typeof delay === 'number' ? delay : 40);
+    } catch (e) { }
+  }
+
+  /* ---- 音/译按钮：并进 #mr-player-extras 那一排 4UI（同款 ctrl-btn / 同排 / gap 10） ---- */
+  function mrAuxCreateButton(kind, label, title) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ctrl-btn mr-aux-btn';
+    btn.id = 'mr-lyric-aux-' + kind;
+    btn.setAttribute('data-aux', kind);
+    btn.setAttribute('aria-pressed', 'false');
+    btn.title = title;
+    btn.textContent = label;
+    btn.addEventListener('click', function (ev) {
+      try { ev.preventDefault(); ev.stopPropagation(); } catch (e) { }
+      mrAuxToggle(kind);
+    });
+    return btn;
+  }
+  function mrAuxModesCluster() {
+    var extras = document.getElementById('mr-player-extras');
+    if (!extras) return null;
+    for (var i = 0; i < extras.children.length; i += 1) {
+      var child = extras.children[i];
+      if (child && child.classList && child.classList.contains('control-cluster') && child.classList.contains('modes')) return child;
+    }
+    return null;
+  }
+  function mrAuxPlaceButtons() {
+    if (!mrAux.btnRoma) mrAux.btnRoma = mrAuxCreateButton('roma', '音', '注音（歌词文件自带罗马音）');
+    if (!mrAux.btnTrans) mrAux.btnTrans = mrAuxCreateButton('trans', '译', '译文（歌词文件自带翻译）');
+    var cluster = mrAuxModesCluster();
+    if (!cluster) {
+      try {
+        window.__mrStructDirty = 1;
+        if (typeof ensureStructure === 'function') ensureStructure();
+        if (typeof layoutPlayerExtrasPos === 'function') layoutPlayerExtrasPos();
+      } catch (e) { }
+      cluster = mrAuxModesCluster();
+    }
+    if (!cluster) return null;
+    var anchor = null;
+    for (var i = 0; i < cluster.children.length; i += 1) {
+      if (cluster.children[i] && cluster.children[i].id === 'lyric-timing-control') { anchor = cluster.children[i]; break; }
+    }
+    var roma = mrAux.btnRoma;
+    var trans = mrAux.btnTrans;
+    var wantRomaPrev = anchor || null;
+    if (roma.parentNode !== cluster || roma.previousElementSibling !== wantRomaPrev) {
+      try { cluster.insertBefore(roma, anchor ? anchor.nextSibling : cluster.firstChild); } catch (e) { }
+    }
+    if (trans.parentNode !== cluster || trans.previousElementSibling !== roma) {
+      try { cluster.insertBefore(trans, roma.nextSibling); } catch (e) { }
+    }
+    return cluster;
+  }
+  function mrAuxApplyButtonState(btn, kind, available) {
+    if (!btn) return;
+    /* 不可用时不要留 active 态（没有注音的歌不该显示「音」为选中） */
+    var active = !!available && mrAux.mode === kind;
+    btn.classList.toggle('mr-aux-hidden', !available);
+    btn.classList.toggle('active', active);
+    try { btn.setAttribute('aria-pressed', active ? 'true' : 'false'); } catch (e) { }
+  }
+  function mrAuxRefresh() {
+    mrAuxPlaceButtons();
+    var available = { roma: false, trans: false };
+    try {
+      var st = mrAux.state;
+      if (st && st.lines && st.lines.length) {
+        var custom = false;
+        try { custom = String(window.lyricSourceMode || '') === 'custom'; } catch (e) { }
+        if (!custom) {
+          var aligned = mrAuxAlignedRoma(st);
+          available.roma = !!(aligned && aligned.hits >= 2 && aligned.ratio >= 0.5);
+          available.trans = mrAuxHasTranslation(st);
+        }
+      }
+    } catch (e) { }
+    mrAuxApplyButtonState(mrAux.btnRoma, 'roma', available.roma);
+    mrAuxApplyButtonState(mrAux.btnTrans, 'trans', available.trans);
+    return available;
+  }
+  function mrAuxToggle(kind) {
+    kind = kind === 'roma' ? 'roma' : (kind === 'trans' ? 'trans' : 'off');
+    var next = mrAux.mode === kind ? 'off' : kind;
+    var available = mrAuxRefresh();
+    if (next === 'roma' && !available.roma) {
+      mrAuxToast('这首歌的歌词文件没有自带注音');
+      return;
+    }
+    if (next === 'trans' && !available.trans) {
+      mrAuxToast('这首歌的歌词文件没有自带译文');
+      return;
+    }
+    mrAux.mode = next;
+    try { window.localStorage.setItem(MR_AUX_MODE_KEY, next); } catch (e) { }
+    mrAuxApplyNow(true);
+    if (next === 'roma') mrAuxToast('注音：按歌词文件自带罗马音显示（无则自动隐藏）');
+    else if (next === 'trans') mrAuxToast('译文：按歌词文件自带翻译显示');
+    else mrAuxToast('音/译已关闭');
+    mrAuxRefresh();
+  }
+
+  /* ---- 安装：截获宿主歌词响应 + 包 setOriginalLyricsState + 观察播放页/底栏变化 ---- */
+  function mrAuxHookSetState() {
+    if (window.__mrLyricAuxSetHooked) return true;
+    var rawSet = window.setOriginalLyricsState;
+    if (typeof rawSet !== 'function') return false;
+    window.__mrLyricAuxSetHooked = 1;
+    window.setOriginalLyricsState = function (lines, hasKaraoke, timingSource, translationLines, translationSource) {
+      if (mrAux.applying) return rawSet.apply(this, arguments);
+      try {
+        mrAuxCaptureBase(lines, hasKaraoke, timingSource, translationLines, translationSource);
+      } catch (e) { }
+      var st = mrAux.state;
+      var player = mrAuxPlayerPage();
+      var effective = 'off';
+      if (player) {
+        try { effective = mrAuxEffectiveMode(st); } catch (e) { effective = 'off'; }
+      }
+      var modeChanged = false;
+      if (player) {
+        try { modeChanged = mrAuxSetHostTranslationMode(effective === 'off' ? 'off' : 'multi'); } catch (e) { }
+      }
+      var result;
+      if (player && effective === 'roma') {
+        var built = mrAuxRomaState(st);
+        mrAux.applying = true;
+        try {
+          result = rawSet.call(this, built.lines, hasKaraoke, timingSource, built.translationLines, 'roma:' + ((st.roma && st.roma.source) || 'file'));
+        } finally {
+          mrAux.applying = false;
+        }
+        mrAux.appliedSig = mrAuxSig(st, 'roma');
+      } else if (player && effective === 'trans') {
+        var transState = mrAuxTransState(st);
+        mrAux.applying = true;
+        try {
+          result = rawSet.call(this, transState.lines, hasKaraoke, timingSource, transState.translationLines, transState.translationSource);
+        } finally {
+          mrAux.applying = false;
+        }
+        mrAux.appliedSig = mrAuxSig(st, 'trans');
+      } else {
+        result = rawSet.apply(this, arguments);
+        mrAux.appliedSig = player ? mrAuxSig(st, effective) : '';
+      }
+      if (modeChanged) {
+        try {
+          window.setTimeout(function () {
+            try { if (typeof window.refreshStageLyricDisplayMode === 'function') window.refreshStageLyricDisplayMode(); } catch (e) { }
+          }, 0);
+        } catch (e2) { }
+      }
+      mrAuxScheduleApply(30);
+      return result;
+    };
+    return true;
+  }
+  function mrAuxBindObservers() {
+    if (window.__mrLyricAuxObservers) return;
+    window.__mrLyricAuxObservers = 1;
+    var soon = function () {
+      try {
+        if (mrAux.refreshTimer) return;
+        mrAux.refreshTimer = window.setTimeout(function () {
+          mrAux.refreshTimer = 0;
+          try { mrAuxRefresh(); } catch (e) { }
+          try {
+            if (mrAuxPlayerPage()) mrAuxApplyNow(false);
+          } catch (e2) { }
+        }, 120);
+      } catch (e) { }
+    };
+    try {
+      if (window.MutationObserver && document.body) {
+        new MutationObserver(soon).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      }
+    } catch (e) { }
+    try {
+      var bar = document.getElementById('bottom-bar');
+      if (bar && window.MutationObserver) {
+        new MutationObserver(soon).observe(bar, { childList: true, subtree: true });
+      }
+    } catch (e2) { }
+    try {
+      document.addEventListener('click', function () {
+        try { window.setTimeout(mrAuxRefresh, 60); } catch (e) { }
+      }, true);
+    } catch (e3) { }
+  }
+  /* 每 2s（看门狗里调用）：补装被宿主换掉的钩子 + 状态自愈 + 轻量刷新 */
+  function mrAuxTick() {
+    try {
+      if (!window.__mrLyricAuxParseHooked) mrAuxHookParse();
+      if (!window.__mrLyricAuxSetHooked) mrAuxHookSetState();
+    } catch (e) { }
+    try {
+      if (!mrAux.state || !mrAux.state.lines || !mrAux.state.lines.length) mrAuxAdoptHostState();
+      else mrAuxApplyNow(false);
+    } catch (e2) {
+      try { mrAuxRefresh(); } catch (e3) { }
+    }
+  }
+  if (typeof window !== 'undefined') {
+    window.__mrLyricAuxDebug = function () {
+      var st = mrAux.state;
+      var rec = st && st.key ? mrAuxRomaRec(st.key) : null;
+      var aligned = st ? mrAuxAlignedRoma(st) : null;
+      return {
+        mode: mrAux.mode,
+        player: mrAuxPlayerPage(),
+        key: st && st.key,
+        baseLines: st && st.lines ? st.lines.length : 0,
+        baseTs: st && st.timingSource,
+        translationLines: st && st.translationLines ? st.translationLines.length : 0,
+        japanese: st ? mrAuxLooksJapanese(st) : false,
+        recLines: rec && rec.lines ? rec.lines.length : 0,
+        recLrcLines: rec && rec.lrcLines ? rec.lrcLines.length : 0,
+        recSource: rec && rec.source,
+        aligned: aligned ? { hits: aligned.hits, candidates: aligned.candidates, ratio: aligned.ratio, phase: aligned.phase } : null,
+        appliedSig: mrAux.appliedSig,
+        hostMode: (window.fx && window.fx.lyricTranslationMode) || '',
+        missed: st && st.key ? mrAuxMissed(st.key) : false,
+        pending: Object.keys(mrAux.romaPending),
+        hasTranslation: st ? mrAuxHasTranslation(st) : false
+      };
+    };
+  }
+  function patchLyricAux() {
+    if (window.__mrLyricAuxPatched) {
+      try { mrAuxTick(); } catch (e) { }
+      return true;
+    }
+    if (typeof window.setOriginalLyricsState !== 'function' || typeof window.applyPreferredLyricsForCurrent !== 'function') return false;
+    window.__mrLyricAuxPatched = 1;
+    mrAux.mode = 'off';
+    try {
+      var saved = window.localStorage.getItem(MR_AUX_MODE_KEY);
+      if (saved === 'roma' || saved === 'trans') mrAux.mode = saved;
+    } catch (e) { }
+    mrAuxHookSetState();
+    mrAuxHookParse();
+    mrAuxBindObservers();
+    mrAuxRefresh();
+    mrAuxAdoptHostState();
+    try {
+      window.setTimeout(function () { try { mrAuxRefresh(); } catch (e) { } }, 900);
+    } catch (e2) { }
+    return true;
+  }
 
   /* ===== v102：面板预热 + 返回键收回动画 ===== */
   var MR_WARM_PANELS = ['daily-recommend-panel', 'listen-history-panel', 'home-platform-recommend-mask'];
@@ -3994,6 +4653,7 @@
     ensureStructure();
     patchHostHooks();
     startWatchdog();
+    try { patchLyricAux(); } catch (e) { }
     forceViewport();
     registerBackButton();
     registerPinchZoom();

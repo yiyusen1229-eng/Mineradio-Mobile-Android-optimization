@@ -1525,14 +1525,29 @@ body.phone-shell #login-modal #login-auth-drawer{position:relative!important;ins
 max-height:none!important;flex:0 0 auto!important;padding:0 12px 14px!important;}
 body.phone-shell #login-modal .login-mode-node{flex:0 0 118px!important;width:118px!important;font-size:12px!important;padding:6px 8px!important;}
 
-/* ===== SPLASH_CSS ===== */
-@keyframes mr-splash-in{from{opacity:0}to{opacity:1}}
-#splash-wordmark .splash-word-mine,#splash-wordmark .splash-word-radio{
-animation:mr-splash-in .5s ease-out both!important;opacity:1!important;clip-path:none!important;}
-#splash-wordmark .splash-word-mine{transform:translate(calc(-50% - 1.096em),-50%)!important;
-letter-spacing:-.055em!important;}
-#splash-wordmark .splash-word-radio{transform:translate(calc(-50% + 1.25em),-50%)!important;
-letter-spacing:-.018em!important;background-position:100% 0!important;}
+/* ===== SPLASH_CSS (v103) ===== */
+/* 恢复源包 css/index.css 的 5.2s 开屏编排（splash-mine-in / splash-radio-in）。
+   v7 曾用 animation:mr-splash-in .5s + opacity:1!important + transform:...!important 把编排整个覆盖成
+   "瞬间出现"（!important 作者声明的优先级高于 CSS 动画，连那 0.5s 淡入其实都没生效）=「不丝滑」根因。
+   源包终帧用 clamp(66px,10.8vw,130px) / clamp(70px,11.4vw,136px) 固定 px 位移，在 52px 触底字号下会留下
+   12px 断缝（源设计是宽屏大字号下 "Mine"+"radio" 两半相接成一词），故镜像宿主 keyframes，只把终帧横向
+   位移换成 em 等价值（Mine -1.096em / radio +1.25em，实测两半相接、0 重叠），过程帧与源包逐帧一致。
+   选择器 #splash-wordmark .splash-word-mine 特异性 1-1-0 > 宿主 .splash-word-mine 的 0-1-0，无需 !important。 */
+@keyframes mr-splash-mine-in{
+  0%{opacity:0;clip-path:inset(48% 0 49% 0);transform:translate(calc(-50% - 10px),-42%) skewX(-10deg) scaleX(1.08);letter-spacing:.055em}
+  14%{opacity:.92;clip-path:inset(40% 0 42% 0);transform:translate(calc(-50% - 4px),-50%) skewX(-4deg) scaleX(1.04);letter-spacing:.014em}
+  26%{opacity:1;clip-path:inset(0);transform:translate(-50%,-50%) skewX(0) scaleX(1);letter-spacing:-.040em}
+  48%{opacity:1;transform:translate(-50%,-50%) scale(1)}
+  67%,100%{opacity:1;transform:translate(calc(-50% - 1.096em),-50%) scale(.998);letter-spacing:-.055em}
+}
+@keyframes mr-splash-radio-in{
+  0%,32%{opacity:0;clip-path:inset(52% 0 44% 0);transform:translate(calc(-50% + clamp(78px,12vw,142px)),-50%) skewX(9deg) scaleX(1.06);background-position:0 0}
+  48%{opacity:.88;clip-path:inset(34% 0 32% 0);transform:translate(calc(-50% + clamp(72px,11.5vw,138px)),-50%) skewX(3deg) scaleX(1.02);background-position:52% 0}
+  66%{opacity:1;clip-path:inset(0);transform:translate(calc(-50% + clamp(70px,11.4vw,136px)),-50%) scale(1);background-position:76% 0}
+  100%{opacity:1;transform:translate(calc(-50% + 1.25em),-50%) scale(1);background-position:100% 0}
+}
+#splash-wordmark .splash-word-mine{animation:mr-splash-mine-in 5200ms cubic-bezier(.22,1,.36,1) forwards}
+#splash-wordmark .splash-word-radio{animation:mr-splash-radio-in 5200ms cubic-bezier(.22,1,.36,1) forwards}
 
 /* ===== LAYOUT_CSS ===== */
 body.phone-shell #playlist-panel{top:calc(10px + env(safe-area-inset-top,0px))!important;
@@ -2739,42 +2754,46 @@ body:has(#home-platform-recommend-mask.show) #phone-chrome-slot{
   display: none!important;
 }
 
-/* ===== v100：音/译按钮放进播放栏，风格对齐底栏 ctrl-btn ===== */
-#mr-lyric-aux{
-  position: absolute!important;
-  left: 12px!important;
-  top: 8px!important;
-  display: flex;
-  flex-direction: row!important;
-  align-items: center!important;
-  gap: 6px!important;
-  z-index: 3!important;
-}
-#mr-lyric-aux button{
-  width: 34px!important;
-  height: 34px!important;
-  min-width: 34px!important;
-  display: inline-flex;
-  align-items: center!important;
-  justify-content: center!important;
-  border-radius: 50%!important;
-  border: 1px solid rgba(255,255,255,.10)!important;
-  background: rgba(255,255,255,.035)!important;
-  color: rgba(248,244,238,.62)!important;
-  font-size: 12.5px!important;
+/* ===== v103：音/译按钮并入播放页 4UI —— 与 #mr-player-extras .ctrl-btn 同款同排 =====
+   4UI 规格：40×40、border-radius 12px、background rgba(10,16,18,.55)、
+   color rgba(255,255,255,.7)、font-size 13.33px、同排 gap 10px（前两条由
+   #mr-player-extras .ctrl-btn 统一给，这里只补齐文字规格）。
+   active 态同 .ctrl-btn.active（controls-hide-btn.active）：color rgba(210,244,241,.9)
+   ＋ 青色 text-shadow。v100 那套 34px 圆形按钮/独立 #mr-lyric-aux 容器已整段删除。
+   按钮 DOM 由 mr-phone.js 插进 #mr-player-extras > .control-cluster.modes，紧挨「词」右侧。 */
+body.phone-shell #mr-player-extras .ctrl-btn.mr-aux-btn{
+  width: 40px!important;
+  height: 40px!important;
+  border-radius: 12px!important;
+  font-size: 13.33px!important;
   font-weight: 700!important;
+  line-height: 1!important;
   letter-spacing: 0!important;
+  padding: 0!important;
+  color: rgba(255,255,255,.7)!important;
   -webkit-tap-highlight-color: transparent!important;
-  backdrop-filter: none!important;
-  -webkit-backdrop-filter: none!important;
 }
-#mr-lyric-aux.mr-aux-on-roma button[data-aux="roma"],
-#mr-lyric-aux.mr-aux-on-trans button[data-aux="trans"]{
-  background: rgba(0,245,212,.14)!important;
-  border-color: rgba(0,245,212,.46)!important;
-  color: #eafffb!important;
+body.phone-shell #mr-player-extras .ctrl-btn.mr-aux-btn.active{
+  color: rgba(210,244,241,.9)!important;
+  text-shadow: 0 0 12px rgba(0,245,212,.16)!important;
 }
-body.phone-shell:not(.mr-player-page) #mr-lyric-aux{ display: none!important; }
+/* 歌词文件没有自带注音 → 隐藏「音」；没有自带译文 → 隐藏「译」；都没有 → 整组消失 */
+body.phone-shell #mr-player-extras .ctrl-btn.mr-aux-hidden{
+  display: none!important;
+}
+/* 只在播放页显示：开屏 / 首页 / 转场中都不露 */
+body.phone-shell:not(.mr-player-page) #mr-player-extras .ctrl-btn.mr-aux-btn,
+body.splash-active #mr-player-extras .ctrl-btn.mr-aux-btn,
+body.mr-transitioning #mr-player-extras .ctrl-btn.mr-aux-btn{
+  display: none!important;
+}
+/* 一排 6 颗（词/音/译/隐藏UI/沉浸/音量）比原来宽 100px：让 4UI 容器借满底栏可用宽度，
+   避免窄屏时最左一颗被挤出屏幕 */
+body.phone-shell.mr-player-page #mr-player-extras{ left: 8px!important; }
+@media (max-width:359px){
+  body.phone-shell #mr-player-extras > .control-cluster.modes{ gap: 6px!important; }
+  body.phone-shell #mr-player-extras .ctrl-btn{ width: 36px!important; height: 36px!important; }
+}
 
 /* ===== v102：大面板去实时模糊（Android WebView 掉帧主因）+ 预热态隐藏 ===== */
 body.phone-shell #playlist-panel,

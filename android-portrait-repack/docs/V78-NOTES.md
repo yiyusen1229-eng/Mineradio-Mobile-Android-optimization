@@ -761,3 +761,113 @@ Android WebView 对大面积 `backdrop-filter` 需要每帧重新采样背景，
 | 最近播放 | 17.6ms | 16.7ms | 2 |
 | 音乐库 | 17.6ms | 16.8ms | 2 |
 | 平台推荐 | 22.3ms | 16.7ms | 2 |
+---
+
+## 32. v103：开屏动画恢复源包 5.2s 编排（「不丝滑」根因）
+
+### 32.1 根因：补丁把宿主编排动画整段覆盖掉了
+源包基底 `assets/public/css/index.css` 自带完整的开屏 wordmark 编排：
+`.splash-word-mine{animation:splash-mine-in 5200ms cubic-bezier(.22,1,.36,1) forwards}`、
+`.splash-word-radio{animation:splash-radio-in 5200ms ...}`。keyframes 里有 clip-path 横缝展开 + skewX/scaleX 斜切回正 +
+letter-spacing 收放，32%/67% 处两半左右分离；逐字 `.splash-word-i::after` 还有 `splash-i-dot-pop 4200ms` 打点，
+`.splash-signal-line` / `.splash-signal-blip` / `.splash-sub` 各有 4200ms 编排。
+
+v7 为了修「字号 145% 时 Mineradio 两半重叠」，在 `phone.css` 里加了 7 行覆盖：`animation:mr-splash-in .5s` +
+`opacity:1!important` + `transform` 写死终态。**`!important` 作者声明的优先级高于 CSS 动画**，所以不只是 5.2s 编排被替换，
+连那 0.5s 淡入也没真正生效（computed opacity 恒为 1）→ 文字在第 1 帧就以终态出现。
+
+证据（`_tmp/work/seek-before/`：reload → 暂停 splash 动画 → seek 到固定时刻截图，像素级可比）：
+seek 到 0 / 400 / 800 / 1200 / 1600 / 2600 / 3400 / 4200 / 5000 / 5200ms 共 10 帧，
+mine 的 `transform` 全是 `matrix(1,0,0,1,-115.023,-23.9179)`、`opacity` 全 1、`clip-path` 全 `none` → 10 帧完全一致，无编排、无淡入。
+
+### 32.2 改法：镜像源包 keyframes，只把终帧位移换成 em
+先试「纯删」（让宿主 5.2s 编排原样生效）：源包终帧是固定 px `clamp(66px,10.8vw,130px)` / `clamp(70px,11.4vw,136px)`，
+在手机 52px 触底字号下 = mine −66px / radio +70px，两半之间净剩 12px 断缝（源设计是宽屏大字号下两半相接成一个词）。
+实测 cand-a：mine 右缘 188 / radio 左缘 200 → 12px 空隙，肉眼可见「Mine radio」断开，故弃用。
+
+最终采用 cand-b：把源包两个 keyframes 原样抄进补丁（改名 `mr-splash-mine-in` / `mr-splash-radio-in`，**过程帧数值与源包逐帧一致**），
+只把终帧横向位移换成 em 等价值：mine `calc(-50% - 1.096em)`（=−57px@52px）、radio `calc(-50% + 1.25em)`（=+65px@52px）
+→ 与 v7 期望的终态一致（两半相接），但过程编排完整保留。选择器用 `#splash-wordmark .splash-word-mine`（特异性 1-1-0）
+压过宿主 `.splash-word-mine`（0-1-0），**不需要任何 !important**。
+
+改动位置：`patch-layer/web/mr-phone/phone.css` 原 1520–1527 行（7 行覆盖）→ 现 1520–1543 行（注释 + 2 个 keyframes + 2 条 animation），
+git diff +23 / −8，仅此一段；括号配平自检 `{`=585 `}`=585 depth=0。
+
+### 32.3 实测：编排恢复、终态与源设计一致
+seek 逐帧（`_tmp/work/seek-afterB/`，改后 v103 装机包）：
+| 时刻 | mine opacity | mine transform | mine clip-path | letter-spacing |
+|---|---|---|---|---|
+| 0ms | 0 | skewX(-10°) scaleX(1.08) | inset(48% 0 49% 0) | +2.86px |
+| 400ms | 0.896 | skewX(-4°) scaleX(1.041) | inset(40.2% …) | +0.78px |
+| 800ms | 0.956 | scaleX(1.022) | inset(21.9% …) | −0.54px |
+| 1200ms | 0.9998 | ≈identity | inset(0.11% …) | −2.07px |
+| 1600ms | 1 | identity | inset(0) | −2.43px |
+| 2600ms | 1 | translate −81.9px | none | −2.85px |
+| 3400ms | 1 | translate −115.0px（左移完成） | none | −2.86px |
+| 4200ms/5000ms/5200ms | 1 | translate −115.0px | none | −2.86px |
+
+→ 0–1.2s：「横缝展开 + 斜切回正 + 字距收拢」；1.6–3.4s：两半在中心交汇（radio 从右侧带 skew 滑入）；
+3.4s 后左右分离到位；radio 的 `background-position` 0%→52%→76%→100% 渐变扫过，逐字 `.splash-word-i` 的点在 60% 弹入。
+终态矩形：mine [81,197]、radio [195,327] → 2px 边框重叠（＝两半相接、视觉上是一个词），与 v102 终态完全相同。
+
+更精确的字形级校验（Range 文本盒，不含元素 padding/伪元素）：
+- mine 字形盒 x `[81.01, 196.84]`、radio 字形盒 x `[194.96, 326.88]` → **字形间隙 = −1.88px**（即两半相接、字形盒重叠 1.9px）；
+- 终态裁切图列亮度剖面：v102 与 v103 **完全一致**（字形总宽 883px、含文字列 772、无内部空白段），
+  而 cand-a 为 929px 且中心有 56px（device px≈15 CSS px）空白段 → 证明「纯删」会断词、v103 与 v102 终态同形。
+- 裁切图：`_tmp/work/crop-v102-final.png`、`crop-v103-final.png`（应一致）、`crop-candA-final.png`（断缝反例）。
+
+### 32.4 帧率数据（同口径）
+**A. 冷启动**（`adb install -r` → force-stop → `am start -W` → 立刻 CDP screencast 7s，同机型同流程）
+| 版本 | 帧数/6.96s | avg | p50 | p95 | p99 | max | jank>32ms | jank>50ms | fps |
+|---|---|---|---|---|---|---|---|---|---|
+| 改前 v102 | 409 | 17.07ms | 16.63 | 19.26 | 36.08 | 70.1ms | 6 | 1 | 58.6 |
+| 改后 v103 | 417 | 16.73ms | 16.67 | 19.49 | 26.18 | 39.6ms | 1 | 0 | 59.8 |
+
+→ 恢复 5.2s 编排**没有引入掉帧**（文字动画是合成器动画，不占主线程），冷启反而更稳（max 70→40ms、jank 6→1）。
+（帧间隔用 `index.json` 的 `cdpTs`（未四舍五入）计算：v102 58.6fps / v103 59.8fps；若用 `frames-meta.json` 中四舍五入到 10ms 的 t，
+计数为 v102 58.4fps、jank32=5 → v103 59.8fps、jank32=1，改善方向一致。）
+
+**B. reload 口径**（`location.reload()` 后 rAF 连续采样 7.6s，用于把「动画」与「启动期长任务」分开看）
+| 版本 | frames | avg | p95 | max | jank>32 | longtask |
+|---|---|---|---|---|---|---|
+| 改前 v102 | 384 | 19.02ms | 18.00ms | 639.8ms | 8 | 3 个 / 909ms |
+| 改后 v103 | 367 | 20.18ms | 20.30ms | 787.1ms | 11 | 2 个 / 741ms |
+| 稳态 2.0–7.0s | — | 16.70 → 16.69ms | — | — | 4 → 1 | — |
+
+说明：0–2s 的 max/jank 由启动期 JS 长任务决定（见 32.5），两次运行的 600ms 级长任务落点不同（328ms vs 479ms），
+故**整段 jank 计数不具可比性**；稳态两者都是 16.7ms（60fps），恢复编排后稳态 jank>32ms 从 4 降到 1。
+无闪白：冷启 409/417 帧里最大白像素占比 0.70% / 0.67%（<1%，噪点级），无整屏白闪。
+
+### 32.5 顺带定位：开屏头 1.5s 的 ~600ms 长任务来自宿主 loader，不是补丁层
+Profiler（200µs 采样，4200ms 窗口）：js-busy 1173ms / (program) 1162ms / idle 1865ms。641ms 长任务窗口内自耗时 top：
+| 自耗时 | 位置 | 调用链 |
+|---|---|---|
+| 366ms | `send @ native` | `readModule @ js/index-loader.js:133` ← `loadMineradioIndexModules` |
+| ~180ms（累计） | `insertBefore @ native` | 注入 ~100 个模块拼成的大 `<script>`，解析/编译 |
+| 58ms | `getBoundingClientRect @ native` | `startBarHeightWatch @ mr-phone/mr-phone.js:2210`（补丁层） |
+| 64ms | `getShaderInfoLog / acquireProgram` | three.js 首帧着色器编译 |
+
+根因是宿主 `js/index-loader.js` 用**同步 XHR**（`open(...,false); send()`）逐个读约 100 个模块文件（393ms），再一次性注入执行；
+补丁层自身 JS 自耗时只有 4.1ms（`mr-phone/mr-phone.js` 合计），它触发的 `getBoundingClientRect` 布局约 58ms（≈长任务的 9%），
+且这部分 v102 就存在。**结论：~600ms 长任务属宿主启动固有，本轮不改宿主 JS，也不建议为此改 mr-phone.js**；
+要继续削启动卡顿只能动宿主 loader（不在本项目范围）。
+
+### 32.6 复现/验收脚本（都在 `_tmp/work/`）
+- `splash-run.mjs --mode orig --label X`：reload 后 rAF 帧间隔 + longtask + 开屏元素计算样式时间序列；
+- `seek-splash.mjs --label X`：reload 后暂停 splash 相关 CSS 动画并 seek 到固定时刻 → 逐帧截图 + 矩形量测（**像素级可比，不受抓图延迟影响**）；
+- `cold-start.ps1 -W <工作根> -Tag X` + `screencast.mjs`：install -r → force-stop → `am start -W` → CDP screencast 7s（冷启口径）；
+- `analyze-frames.py`：帧间隔统计 + 白闪检测；`profiler.mjs` / `prof-analyze.cjs`：长任务归因；
+- `montage.py` → `splash-compare-before-after.png`：改前/改后逐帧对比图。
+
+产物：`_tmp/work/splash-compare-before-after.png`（对比图）、`seek-before/`（改前 10 帧）、`seek-afterB/`（改后 10 帧）、
+`cold-V102/`（改前冷启 409 帧）、`cold-B/`（改后冷启 417 帧）、
+`crop-v102-final.png` / `crop-v103-final.png` / `crop-candA-final.png`（终态字形带裁切，用于肉眼判缝）。
+
+### 32.7 已知风险 / 观察
+- 48%–66% 段两半在中心**有意重叠**（源包设计：先交汇成词再分开），与宿主逐帧一致；若觉得不好看属源设计取舍。
+- 逐字 `.splash-word-i`、signal-line、sub 文案动画未被补丁覆盖，仍走宿主规则（已确认在动）。
+- 中间帧沿用源包 px/clamp 值（与 52px 触底对齐）；若将来字号 >65px，中间帧比例与源包宽屏版略有差异——与源包在同字号下表现一致，不算回归。
+- 冷启前 1–1.5s 仍有宿主 loader 造成的 ~600ms 长任务（v102 就有，本轮未加重）。
+- 本轮开屏验证装机包：`_tmp/build-v62/v62-signed.apk`，size 75947839，SHA256 `673C1775…936DB746`；
+  **最终集成包（含 v103 注音/按钮改动）**：size 75956031，SHA256 `77B72A8D366922A1ED8B4AC61E6EDFD8334628EC06C8108A5CC626F5569FAB2E`，产物 `Mineradio竖屏-v103-开屏与注音.apk`。
+- Lead 独立复核（最终集成包）：冷启 screencast 414 帧/6.97s = 59.1fps、avg 16.88ms、p50 16.60、p95 19.78、max 45.9ms、jank>32=4、>50=0、最大白像素 0.63%；逐帧 0.4s「Mine」→1.2s 交汇→2.6s 后成形，终态无断缝。
