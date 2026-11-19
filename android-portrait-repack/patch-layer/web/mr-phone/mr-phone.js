@@ -2837,6 +2837,204 @@
     }
     return Promise.resolve(null);
   }
+  /* ---- 酷狗注音：歌词文件只有 [kana:] 逐字读音（假名），没有现成罗马音 ----
+     实测 10 个候选只有 [ti/ar/al/by/offset] + [kana:]（+ 部分 [language:] 中文翻译），
+     没有任何 roma 字段、也没有空格分隔的罗马音行；酷狗客户端自己按音节切分罗马音。
+     这里复刻同样规则：汉字读音（假名）→ Hepburn → 每音节一个词（拗音合写、促音并入下一音节、
+     ー 补元音、ん 独立 n），时间轴用同文件的对齐结果（宿主行 t 秒）。仅当其它平台 roma 拿不到时走这条。 */
+  var MR_KG_UAM = 'Mozilla/5.0 (Linux; Android 13) Chrome/120 Mobile';
+  var MR_KG_HDR = { 'Referer': 'https://www.kugou.com/', 'User-Agent': MR_KG_UAM };
+  function mrKgB64Text(content) {
+    try { return decodeURIComponent(escape(atob(String(content || '').trim()))); } catch (e) {
+      try { return atob(String(content || '').trim()); } catch (e2) { return ''; }
+    }
+  }
+  function mrKgBridgeGet(url) {
+    var bridge = window.__mrBridgeRequest;
+    if (typeof bridge !== 'function') return Promise.reject(new Error('NO_BRIDGE'));
+    return Promise.resolve(bridge({ url: url, method: 'GET', headers: MR_KG_HDR, timeoutMs: 12000 })).then(function (res) {
+      return String((res && res.body) || '');
+    });
+  }
+  function mrKgKanaTagOf(text) {
+    var m = String(text || '').match(/\[kana:([^\]]*)\]/i);
+    return m ? m[1] : '';
+  }
+  /* kana 标签分隔符是数字 '1'，但时间戳 (20256,24) 里也有 1 → 只在括号外切 */
+  function mrKgParseKanaTag(tag) {
+    var groups = [], buf = '', depth = 0, i, ch;
+    tag = String(tag || '');
+    for (i = 0; i < tag.length; i += 1) {
+      ch = tag.charAt(i);
+      if (ch === '(') depth += 1;
+      else if (ch === ')') depth -= 1;
+      if (ch === '1' && depth === 0) { groups.push(buf); buf = ''; continue; }
+      buf += ch;
+    }
+    if (buf) groups.push(buf);
+    var readings = [];
+    for (i = 0; i < groups.length; i += 1) readings.push(groups[i].replace(/\(\d+,\d+\)/g, ''));
+    var anchor = -1, anchorMs = 0;
+    for (i = 0; i < groups.length; i += 1) {
+      var mm = groups[i].match(/\((\d+),/);
+      if (mm) { anchor = i; anchorMs = Number(mm[1]); break; }
+    }
+    return { readings: readings, anchor: anchor, anchorMs: anchorMs };
+  }
+  var MR_KG_KANA = { 'あ': 'a', 'い': 'i', 'う': 'u', 'え': 'e', 'お': 'o', 'か': 'ka', 'き': 'ki', 'く': 'ku', 'け': 'ke', 'こ': 'ko', 'さ': 'sa', 'し': 'shi', 'す': 'su', 'せ': 'se', 'そ': 'so', 'た': 'ta', 'ち': 'chi', 'つ': 'tsu', 'て': 'te', 'と': 'to', 'な': 'na', 'に': 'ni', 'ぬ': 'nu', 'ね': 'ne', 'の': 'no', 'は': 'ha', 'ひ': 'hi', 'ふ': 'fu', 'へ': 'he', 'ほ': 'ho', 'ま': 'ma', 'み': 'mi', 'む': 'mu', 'め': 'me', 'も': 'mo', 'や': 'ya', 'ゆ': 'yu', 'よ': 'yo', 'ら': 'ra', 'り': 'ri', 'る': 'ru', 'れ': 're', 'ろ': 'ro', 'わ': 'wa', 'を': 'wo', 'ん': 'n', 'が': 'ga', 'ぎ': 'gi', 'ぐ': 'gu', 'げ': 'ge', 'ご': 'go', 'ざ': 'za', 'じ': 'ji', 'ず': 'zu', 'ぜ': 'ze', 'ぞ': 'zo', 'だ': 'da', 'ぢ': 'ji', 'づ': 'zu', 'で': 'de', 'ど': 'do', 'ば': 'ba', 'び': 'bi', 'ぶ': 'bu', 'べ': 'be', 'ぼ': 'bo', 'ぱ': 'pa', 'ぴ': 'pi', 'ぷ': 'pu', 'ぺ': 'pe', 'ぽ': 'po', 'ぁ': 'a', 'ぃ': 'i', 'ぅ': 'u', 'ぇ': 'e', 'ぉ': 'o', 'ゃ': 'ya', 'ゅ': 'yu', 'ょ': 'yo', 'ゎ': 'wa', 'ゔ': 'vu', 'ゐ': 'i', 'ゑ': 'e' };
+  var MR_KG_KANA2 = { 'きゃ': 'kya', 'きゅ': 'kyu', 'きょ': 'kyo', 'しゃ': 'sha', 'しゅ': 'shu', 'しょ': 'sho', 'ちゃ': 'cha', 'ちゅ': 'chu', 'ちょ': 'cho', 'にゃ': 'nya', 'にゅ': 'nyu', 'にょ': 'nyo', 'ひゃ': 'hya', 'ひゅ': 'hyu', 'ひょ': 'hyo', 'みゃ': 'mya', 'みゅ': 'myu', 'みょ': 'myo', 'りゃ': 'rya', 'りゅ': 'ryu', 'りょ': 'ryo', 'ぎゃ': 'gya', 'ぎゅ': 'gyu', 'ぎょ': 'gyo', 'じゃ': 'ja', 'じゅ': 'ju', 'じょ': 'jo', 'びゃ': 'bya', 'びゅ': 'byu', 'びょ': 'byo', 'ぴゃ': 'pya', 'ぴゅ': 'pyu', 'ぴょ': 'pyo' };
+  var MR_KG_PUNCT = { '。': '.', '、': ',', '！': '!', '？': '?', '，': ',', '．': '.', '：': ':', '；': ';', '（': '(', '）': ')', '〜': '~', '～': '~' };
+  /* 假名行 → 按音节空格分隔的罗马音（与酷狗客户端展示一致） */
+  function mrKgKanaToRoma(kana) {
+    kana = String(kana || '').replace(/[\u30a1-\u30f6]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0x60); });
+    var tokens = [], geminate = false, lastKana = -1, i, c, two, token;
+    for (i = 0; i < kana.length; i += 1) {
+      c = kana.charAt(i);
+      if (c === 'っ') { geminate = true; continue; }
+      if (c === 'ー') {
+        if (lastKana >= 0) { var prev = tokens[lastKana]; var v = prev.match(/[aeiou](?!.*[aeiou])/); tokens.push(v ? v[0] : ''); lastKana = tokens.length - 1; }
+        continue;
+      }
+      two = kana.slice(i, i + 2);
+      token = null;
+      if (MR_KG_KANA2[two]) { token = MR_KG_KANA2[two]; i += 1; }
+      else if (MR_KG_KANA[c] !== undefined) token = MR_KG_KANA[c];
+      if (token !== null) {
+        if (geminate) { token = token.charAt(0) + token; geminate = false; }
+        tokens.push(token); lastKana = tokens.length - 1;
+        continue;
+      }
+      if (MR_KG_PUNCT[c]) {
+        if (c === '：' || c === '；') tokens.push(MR_KG_PUNCT[c]);
+        else if (tokens.length) tokens[tokens.length - 1] += MR_KG_PUNCT[c];
+        else tokens.push(MR_KG_PUNCT[c]);
+        continue;
+      }
+      if (c === '「' || c === '」' || c === '『' || c === '』') continue;
+      if (c === ' ' || c === '\u3000') { geminate = false; tokens.push(' '); continue; }
+      if (/[A-Za-z0-9'’\-]/.test(c)) {
+        if (tokens.length && /^[A-Za-z0-9'’\-]+$/.test(tokens[tokens.length - 1])) tokens[tokens.length - 1] += c;
+        else tokens.push(c);
+        lastKana = -1;
+        continue;
+      }
+      tokens.push(c);
+    }
+    var s = '';
+    for (i = 0; i < tokens.length; i += 1) {
+      var t = tokens[i];
+      if (t === ' ') { if (s && s.charAt(s.length - 1) !== ' ') s += ' '; continue; }
+      if (!s) { s = t; continue; }
+      if (/^[;:]/.test(t)) s += ' ' + t + ' ';
+      else if (/^[.,!?~)]/.test(t)) s += t + ' ';
+      else s += ' ' + t;
+    }
+    return s.replace(/\s+/g, ' ').trim();
+  }
+  /* 抓酷狗官方日语歌词的 [kana:] 并按宿主歌词行对齐 → 返回与 v103 roma 相同的缓存记录 */
+  function mrAuxFetchKgKanaRoma(st, song) {
+    if (!st || !st.key || !song) return Promise.resolve(null);
+    if (mrAuxProviderOf(song) !== 'kugou') return Promise.resolve(null);
+    var keyword = String(song.name || song.title || '').trim();
+    if (!keyword) return Promise.resolve(null);
+    var hash = String(song.hash || song.id || '');
+    var titleOnly = keyword.replace(/^.*?\s*[-–—]\s*/, '').trim();
+    var artistOnly = (keyword.match(/^(.*?)\s*[-–—]\s*/) || [, ''])[1].trim();
+    var kws = [keyword, titleOnly, (titleOnly + ' ' + artistOnly).trim()];
+    var durMs = Number(song.duration) || 0;
+    if (durMs && durMs < 10000) durMs = durMs * 1000;
+    var candMap = Object.create(null);
+    function searchOne(kw, withHash) {
+      var url = 'https://krcs.kugou.com/search?ver=1&man=yes&client=pc&lrctxt=1&keyword=' + encodeURIComponent(kw) +
+        (withHash && hash ? ('&hash=' + encodeURIComponent(hash)) : '') +
+        (durMs ? ('&duration=' + Math.round(durMs)) : '');
+      return mrKgBridgeGet(url).then(function (body) {
+        try {
+          var j = JSON.parse(body);
+          (j.candidates || []).forEach(function (c) { if (c && c.id) candMap[String(c.id)] = c; });
+        } catch (e) { }
+      }).catch(function () { });
+    }
+    var jobs = [];
+    for (var ki = 0; ki < kws.length; ki += 1) {
+      var kw = String(kws[ki] || '').trim();
+      if (!kw) continue;
+      jobs.push(searchOne(kw, 1));
+      jobs.push(searchOne(kw, 0));
+    }
+    return Promise.all(jobs).then(function () {
+      var list = Object.keys(candMap).map(function (k) { return candMap[k]; });
+      var score = function (c) {
+        var s = 0;
+        if (/日语|日語/.test(String(c.language || ''))) s += 4;
+        if (String(c.contenttype) === '0') s += 2;
+        if (String(c.krctype) === '1') s += 1;
+        if (/官方/.test(String(c.product_from || ''))) s += 2;
+        return s;
+      };
+      list.sort(function (a, b) { return score(b) - score(a); });
+      var idx = 0;
+      function next() {
+        if (idx >= Math.min(list.length, 8)) return Promise.resolve(null);
+        var c = list[idx]; idx += 1;
+        return mrKgBridgeGet('https://lyrics.kugou.com/download?ver=1&client=pc&id=' + encodeURIComponent(c.id) +
+          '&accesskey=' + encodeURIComponent(c.accesskey) + '&fmt=lrc&charset=utf8').then(function (body) {
+          var d = {};
+          try { d = JSON.parse(body); } catch (e) { d = {}; }
+          var text = mrKgB64Text(d && d.content);
+          if (!/\[kana:/i.test(text)) return next();
+          return { text: text, cand: c };
+        }).catch(function () { return next(); });
+      }
+      return next();
+    }).then(function (hit) {
+      if (!hit) return null;
+      var parsed = mrKgParseKanaTag(mrKgKanaTagOf(hit.text));
+      if (parsed.anchor < 0 || !parsed.readings.length) return null;
+      var lrcLines = [];
+      String(hit.text).split(/\r?\n/).forEach(function (line) {
+        var m = line.match(/^\[(\d{1,2}):(\d{1,2})(?:\.(\d+))?\]/);
+        if (!m) return;
+        var ms = (+m[1]) * 60000 + (+m[2]) * 1000 + Math.round(Number('0.' + (m[3] || '0')) * 1000);
+        lrcLines.push({ ms: ms, text: line.replace(/^\[[^\]]+\]/, '') });
+      });
+      if (lrcLines.length < 2) return null;
+      var hostLines = (st.lines || []).slice();
+      if (hostLines.length < 2) return null;
+      var startIdx = -1;
+      for (var hi = 0; hi < hostLines.length; hi += 1) {
+        if (Math.round((Number(hostLines[hi].t) || 0) * 1000) >= parsed.anchorMs - 120) { startIdx = hi; break; }
+      }
+      if (startIdx < 0) return null;
+      var NEED = /[\u3400-\u4dbf\u4e00-\u9fff\u3005]/;
+      var ri = parsed.anchor, outLines = [], mapped = 0;
+      for (var li = startIdx; li < hostLines.length; li += 1) {
+        var src = String(hostLines[li].text || '');
+        var kana = '';
+        for (var ci = 0; ci < src.length; ci += 1) {
+          var ch = src.charAt(ci);
+          if (NEED.test(ch)) { var rd = parsed.readings[ri]; ri += 1; kana += (rd || ch); }
+          else kana += ch;
+        }
+        var roma = mrKgKanaToRoma(kana);
+        if (roma) { outLines.push({ t: Number(hostLines[li].t) || 0, text: roma }); mapped += 1; }
+      }
+      if (mapped < 4 || mapped < hostLines.length * 0.35) return null;
+      var key = st.key;
+      var rec = { key: key, source: 'kg-kana', lines: outLines, lrcLines: [], at: Date.now() };
+      mrAux.romaMem[key] = rec;
+      try { mrAuxStorePut(key, rec); } catch (e) { }
+      delete mrAux.romaMissMem[key];
+      var stNow = mrAux.state;
+      if (stNow && stNow.key === key && mrAux.mode === 'roma') {
+        stNow.romaChecked = false;
+        stNow.roma = undefined;
+        mrAuxScheduleApply(0);
+      }
+      return rec;
+    }).catch(function () { return null; });
+  }
+
   /* ---- 缺注音时按 song key 补取一次（先 bridge 取文件注音，再宿主 /api 兜底） ---- */
   function mrAuxFetchRoma(st) {
     var key = st && st.key;
@@ -2848,7 +3046,13 @@
     try {
       if (typeof lyricEndpointForSong === 'function') endpoint = lyricEndpointForSong(song);
     } catch (e) { endpoint = ''; }
-    if (!endpoint || typeof window.apiJson !== 'function') return Promise.resolve(null);
+    if (!endpoint || typeof window.apiJson !== 'function') {
+      /* 没有宿主 /api 通道也还能走酷狗 [kana:] 兜底（v105d） */
+      if (mrAuxProviderOf(song) !== 'kugou') return Promise.resolve(null);
+      var kgOnly = mrAuxFetchKgKanaRoma(st, song).catch(function () { return null; });
+      mrAux.romaPending[key] = kgOnly;
+      return kgOnly.then(function (rec) { delete mrAux.romaPending[key]; if (!rec) mrAuxMissSet(key); return rec; });
+    }
     var task = Promise.resolve()
       .then(function () { return mrAuxFetchRomaViaBridge(song); })
       .catch(function () { return null; })
@@ -2857,6 +3061,12 @@
         return Promise.resolve(window.apiJson(endpoint, { timeoutMs: 6500 }))
           .then(function (data) { return mrAuxCaptureRoma(song, data || {}); })
           .catch(function () { return null; });
+      })
+      .then(function (rec) {
+        /* v105d：酷狗没有 romalrc/roma 字段，但官方日语歌词带 [kana:] 逐字读音 →
+           本地转「按音节分隔」的罗马音（与酷狗客户端展示一致），走同一条 roma 管线 */
+        if (rec) return rec;
+        return mrAuxFetchKgKanaRoma(st, song);
       })
       .then(function (rec) {
         if (!rec) mrAuxMissSet(key);
