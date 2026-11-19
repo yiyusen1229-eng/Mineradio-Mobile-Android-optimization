@@ -1987,12 +1987,13 @@ body.phone-shell #mr-progress-row{font-size:clamp(10px, 1.3vh, 12px)!important;}
 body.phone-shell #search-input{font-size:clamp(15px, 2.1vh, 18px)!important;}
 body.phone-shell #search-area{left:clamp(8px, 2vw, 16px)!important;right:clamp(52px, 14vw, 72px)!important;}
 
-/* 窄屏（≤360）：再收一档，避免 4UI/DIY 挤在一起 */
+/* 窄屏（≤360）：再收一档，避免 4UI/DIY 挤在一起
+   v105c：窄屏**不减键**（用户要求 7 键全保留）→ 缩间距而不是隐藏键 */
 @media (max-width:360px){
   body.phone-shell{
     --mr-row-h:40px;
     --mr-ctrl-size:36px;
-    --mr-transport-gap:6px;
+    --mr-transport-gap:5px;
   }
   body.phone-shell #bottom-bar #controls > .control-cluster.actions{padding-right:48px!important;}
   body.phone-shell #mr-player-extras{gap:4px!important;}
@@ -2043,11 +2044,8 @@ body.phone-shell #toast{left:calc(16px + env(safe-area-inset-left,0px))!importan
 body.phone-shell #playlist-panel{bottom:calc(var(--mr-bar-h,150px) + 8px + var(--mr-sys-bottom, 22px))!important;}
 /* 首页内容底部间距跟着底栏走 */
 body.phone-shell #empty-home{bottom:calc(var(--mr-bar-h,150px) - 12px + var(--mr-sys-bottom, 22px))!important;}
-/* 320 极窄屏：7 键挤不下时先把收藏键收进次级位（保留 5 键） */
-@media (max-width:340px){
-  body.phone-shell #bottom-bar #heart-btn{display:none!important;}
-  
-}
+/* v105c：窄屏**不减键** —— 删掉旧的「≤340 隐藏收藏键」规则；7 键全保留，
+   靠 --mr-transport-gap（≤360 已收到 5px）+ flex 等比收缩放进底栏。 */
 /* 短屏深色横屏：底栏压缩、extras/DIY 同步缩小 */
 @media (orientation:landscape) and (max-height:520px){
   /* v105：#mr-player-extras 的 right/height 已统一由下方 V69 横屏块提供，这里不再重复 */
