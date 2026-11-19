@@ -733,6 +733,7 @@
       bindFab(document.getElementById('fx-fab'));
       updateProgressTimes();
       try { patchFallbackNotice(); patchPlaylistEdgeTrigger(); patchLyricOnlineSearch(); } catch (e) { }
+      try { patchProgressiveHomeDiscover(); patchPlatformFeedsParallel(); } catch (e) { }
     } catch (e) { }
   }
 
@@ -5150,6 +5151,70 @@
       else unpinNotice(n);
     }
   }
+  /* ---- v105e：网络「谁先回谁先渲染，不等最慢」 ---- */
+  /* ① 首页发现区：宿主 loadHomeDiscover 只等 /api/discover/home 聚合（服务端并行、等最慢），
+     期间首页三卡是空的。这里并行补两路更快的轻请求（热电台 /api/podcast/hot、我的歌单），
+     谁先回先把对应板块填进 homeDiscoverState 并重渲染；聚合结果回来后再整体覆盖。 */
+  function patchProgressiveHomeDiscover() {
+    if (window.__mrProgressiveHomePatched) return true;
+    var apiJson = window.apiJson;
+    var rawLoad = window.loadHomeDiscover;
+    var st = window.homeDiscoverState;
+    var render = window.renderHomeDiscover;
+    if (typeof apiJson !== 'function' || typeof rawLoad !== 'function' || !st || typeof render !== 'function') return false;
+    window.__mrProgressiveHomePatched = 1;
+    var inflight = Object.create(null);
+    function safeRender() { try { render(); } catch (e) { } }
+    function partial(url, apply) {
+      if (inflight[url]) return;
+      inflight[url] = 1;
+      Promise.resolve().then(function () {
+        return apiJson(url + (url.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now(), { timeoutMs: 6000 });
+      }).then(function (data) {
+        if (!data || st.loaded) return;
+        apply(data);
+        safeRender();
+      }).catch(function () { }).then(function () { delete inflight[url]; });
+    }
+    window.loadHomeDiscover = function () {
+      var p = rawLoad.apply(this, arguments);
+      if (st.loaded) return p;
+      partial('/api/podcast/hot?limit=8', function (d) {
+        var arr = (d && (d.podcasts || d.radios || d.djRadios)) || [];
+        if (arr.length && (!st.podcasts || st.podcasts.length < arr.length)) st.podcasts = arr;
+      });
+      partial('/api/user/playlists?paged=1&limit=10&offset=0', function (d) {
+        var arr = (d && (d.playlists || (d.data && d.data.playlists) || d.list)) || [];
+        if (arr.length && (!st.playlists || st.playlists.length < arr.length)) st.playlists = arr;
+      });
+      return p;
+    };
+    return true;
+  }
+  /* ② 平台推荐面板：打开时并行预取全部平台；每个平台自己回来就自己渲染对应 tab，
+     不再「切到哪个 tab 才等哪个平台」。已加载过的源由 feedState.loaded 挡住不会重复请求。 */
+  function patchPlatformFeedsParallel() {
+    if (window.__mrPlatformFeedsPatched) return true;
+    var raw = window.loadHomePlatformRecommendations;
+    var feed = window.loadHomePlatformFeedRecommendations;
+    var cfg = window.homePlatformRecommendationFeedConfig;
+    if (typeof raw !== 'function' || typeof feed !== 'function' || typeof cfg !== 'function') return false;
+    window.__mrPlatformFeedsPatched = 1;
+    var sources = ['qishui', 'kugou', 'ytm', 'bodian', 'qq'];
+    window.loadHomePlatformRecommendations = function () {
+      var p = raw.apply(this, arguments);
+      window.setTimeout(function () {
+        for (var i = 0; i < sources.length; i += 1) {
+          try {
+            if (cfg(sources[i])) Promise.resolve(feed(sources[i], false)).catch(function () { });
+          } catch (e) { }
+        }
+      }, 60);
+      return p;
+    };
+    return true;
+  }
+
   function patchFallbackNotice() {
     if (window.__mrFallbackNoticePatched) return true;
     if (typeof window.showSourceFallbackNotice !== 'function') return false;
