@@ -20,7 +20,7 @@
  *   §5 Chrome/视口    buildChrome / forceViewport / patchPeek
  *   §6 转场状态机     首页⇄播放页（FLIP + 360ms 单转场，本区最敏感，勿轻改）
  *   §7 宿主钩子       patchHostHooks（updateEmptyHomeVisibility / immersive 旁路）
- *   §8 缓存/调优      patchApiCache / tuneAudioFade / tuneRendererOnce / patchHomeToast
+ *   §8 缓存/调优      mrMigrateApiCacheV104（v104 删 v88 缓存层）/ tuneAudioFade / tuneRendererOnce / patchHomeToast
  *   §9 弹层           placePopover / hidePopover / bindPlayerPopovers
  *   §10 通知/登录     noticeWatch / styleLoginModal
  *   §11 底栏/UI       layoutPhoneBar / syncChromeAvatar / updatePlayerPage
@@ -232,6 +232,33 @@
     return true;
   }
 
+  /* ===== v104-search：搜索空包判定（缓存层与渐进搜索共用）=====
+     真机证据：v88 那层 localStorage 缓存把 v94 的 `MR_SEARCH_TIMEOUT` 哨兵和真空包
+     也当正常结果存了 6 小时，之后同一关键词 2~4ms 就返回空包 → 宿主把空列表渲染成
+     「没有找到相关歌曲」。v88 层已由 v104-net P1 删除；这里补两道保险：
+     1) v94 缓存永远不写「没有 songs 的搜索响应」，命中也视为未命中；
+     2) 渐进搜索把任何空包/错误包当「不可信」，带 mrrerun 重取一次再决定是否显示空态。 */
+  function mrSearchPayloadSongs(data) {
+    if (!data || typeof data !== 'object') return 0;
+    var cands = [data.songs, data.tracks];
+    if (data.value && typeof data.value === 'object') cands.push(data.value.songs);
+    if (data.result && typeof data.result === 'object') cands.push(data.result.songs);
+    if (data.data && typeof data.data === 'object') cands.push(data.data.songs);
+    for (var i = 0; i < cands.length; i++) {
+      if (Array.isArray(cands[i]) && cands[i].length) return cands[i].length;
+    }
+    return 0;
+  }
+
+  function mrSearchPayloadEmpty(data) {
+    try {
+      if (!data || typeof data !== 'object') return true;
+      if (data.error) return true;
+      if (data.ok === false) return true;
+      return mrSearchPayloadSongs(data) === 0;
+    } catch (e) { return true; }
+  }
+
   /* ===== v86：/api GET 响应缓存（内存 + IndexedDB）=====
      宿主每次打开歌单都会重新拉 /api/user/playlists；旧手机层的 localStorage 缓存已在 v78 清掉。
      这里补一个不占 localStorage 配额的缓存：内存命中即时返回，IndexedDB 持久化（TTL 20 分钟）。
@@ -255,7 +282,14 @@
         dbPromise: null,
         wrapped: null,
         statusMem: Object.create(null),
-        urlMem: Object.create(null)
+        urlMem: Object.create(null),
+        /* v104-net：失败的取址结果短负缓存 + 同 URL 在途请求合并表。
+           urlNegById 额外按「平台+hash/mid/id」记一份：宿主切音质/重试会换 URL，
+           只按完整 URL 记负缓存挡不住，同一首歌会反复等 4.7s 才失败。 */
+        urlNeg: Object.create(null),
+        urlNegById: Object.create(null),
+        lyricNeg: Object.create(null),
+        inflight: Object.create(null)
       };
       window.__mrApiCacheState = state;
       window.__mrApiCacheInstalled = 1;
@@ -263,7 +297,17 @@
     if (window.fetch === state.wrapped) return true;
 
     var STATUS_TTL = 10 * 60 * 1000;
+    /* v104-net：song/url 内存 10min（宿主换歌复用），落盘只留 6min（CDN 签名地址会过期，
+       跨重启只服务"刚听过又回来"；过期地址由 audio error 事件作废） */
     var SONG_URL_TTL = 10 * 60 * 1000;
+    var SONG_URL_DB_TTL = 6 * 60 * 1000;
+    var LYRIC_DB_TTL = 20 * 60 * 1000;
+    /* 失败取址/空歌词的短负缓存：宿主 fallback 会重试同一条 URL，命中可省一次完整往返，
+       但过期后必须放开，避免平台恢复后还一直拿旧失败 */
+    var SONG_URL_NEG_TTL = 90 * 1000;
+    var LYRIC_EMPTY_NEG_TTL = 120 * 1000;
+    /* 按 song 身份（平台+hash/mid/id）的失败记忆：登录/登出、audio 报错都会清空 */
+    var SONG_URL_ID_NEG_TTL = 180 * 1000;
     var SEARCH_TIMEOUT = 12000;
     if (!isFinite(SEARCH_TIMEOUT) || SEARCH_TIMEOUT < 2000) SEARCH_TIMEOUT = 12000;
 
@@ -322,20 +366,55 @@
     function fetchUrl(input) {
       try { return typeof input === 'string' ? input : (input && input.url) || ''; } catch (e) { return ''; }
     }
-    /* 去掉时间戳类易变参数，否则每次 key 都不同 → 缓存永远不命中 */
+    /* 去掉时间戳类易变参数，否则每次 key 都不同 → 缓存永远不命中
+       v104：mrrerun 也归一化掉；带 mrrerun 的请求只「跳过读缓存」，成功结果仍写回
+       归一化 key —— 这样 cache-buster 重取既能绕过旧空包，又能把新结果缓存给下次用。 */
     function normalizeCacheKey(url) {
       try {
         var u = new URL(url, location.href);
-        var drop = ['t', '_', '_t', 'ts', 'timestamp', 'cachebuster', 'rnd', 'random'];
+        var drop = ['t', '_', '_t', 'ts', 'timestamp', 'cachebuster', 'rnd', 'random', 'mrrerun'];
         drop.forEach(function (k) { if (u.searchParams.has(k)) u.searchParams.delete(k); });
         return u.href;
       } catch (e) { return url; }
     }
+    function hasCacheBuster(url) {
+      return /[?&]mrrerun=/.test(url);
+    }
     function classify(url) {
       if (/\/status(\?|$)|\/login\/status/.test(url)) return 'status';
       if (/\/song\/url(\?|$)/.test(url)) return 'songurl';
+      if (/\/lyric(\?|$)/.test(url)) return 'lyric';
       if (/\/search(\?|$)|\/cloudsearch\/pc/.test(url)) return 'search';
       return 'other';
+    }
+    /* v104-net：按 kind 决定落盘 TTL（旧条目没有 k 字段时按本次请求的 kind 现算） */
+    function ttlForKind(kind) {
+      if (kind === 'songurl') return SONG_URL_DB_TTL;
+      if (kind === 'lyric') return LYRIC_DB_TTL;
+      return state.ttl;
+    }
+    /* v104-net：失败包判定——无播放地址的取址响应、空歌词不进正式缓存 */
+    function isSongUrlFailure(d) {
+      try { return !(d && d.url); } catch (e) { return true; }
+    }
+    function isEmptyLyricPayload(d) {
+      try { return !(d && (d.lyric || d.yrc || d.ytlrc || d.tlyric)); } catch (e) { return true; }
+    }
+    function shouldNegCache(kind, d) {
+      if (kind === 'songurl') return isSongUrlFailure(d);
+      if (kind === 'lyric') return isEmptyLyricPayload(d);
+      return false;
+    }
+    /* v104-net：取址请求的「平台+歌」身份（酷狗 hash / QQ mid / 其它 id） */
+    function songUrlIdentity(url) {
+      try {
+        var u = new URL(url, location.href);
+        var m = /\/api\/([^/]+)\/song\/url/.exec(u.pathname);
+        var provider = m ? m[1] : (u.pathname === '/api/song/url' ? 'netease' : '');
+        var id = u.searchParams.get('hash') || u.searchParams.get('mid') || u.searchParams.get('id') || '';
+        if (!provider || !id) return '';
+        return provider + '|' + id;
+      } catch (e) { return ''; }
     }
     function clearAuthStatus() {
       try {
@@ -343,6 +422,12 @@
           if (/\/status|login/.test(k)) delete state.statusMem[k];
         });
       } catch (e) { }
+      /* v104-net：登录态变了，之前的取址失败可能只是缺权限 → 负缓存全部作废 */
+      try {
+        state.urlNeg = Object.create(null);
+        state.urlNegById = Object.create(null);
+        state.lyricNeg = Object.create(null);
+      } catch (e2) { }
     }
     function cacheable(url, init) {
       try {
@@ -363,11 +448,18 @@
       if (!cacheable(absUrl, init)) return rawFetch.apply(window, arguments);
       var key = normalizeCacheKey(absUrl);
       var kind = classify(absUrl);
+      var bust = hasCacheBuster(absUrl);
       var now = Date.now();
       var self = this;
+      /* v104-net：从进入 fetch 就计时（原来的 t0 在 await 之后才取 → 全部记成 0ms） */
+      var tReq = performance.now();
 
       function isSentinelPayload(d) {
         try { return !!(d && (d.error === 'MR_SEARCH_TIMEOUT' || d.__mrTimeout)); } catch (e) { return false; }
+      }
+      /* v104：【搜索】空包/错误包一律不可信：不读、不写、命中视为未命中 */
+      function isUntrustedSearchPayload(d) {
+        return kind === 'search' && mrSearchPayloadEmpty(d);
       }
 
       if (kind === 'status') {
@@ -378,9 +470,26 @@
         }
       } else if (kind === 'songurl') {
         var su = state.urlMem[key];
-        if (su && now - su.t < SONG_URL_TTL) {
+        if (su && now - su.t < SONG_URL_TTL && !isSongUrlFailure(su.d)) {
           var suResp = makeJsonResponse(su.d);
-          if (suResp) return Promise.resolve(suResp);
+          if (suResp) { try { mrNetRec(kind, key, performance.now() - tReq, true, 'mem'); } catch (e) { } return Promise.resolve(suResp); }
+        }
+        var sn = state.urlNeg[key];
+        if (sn && now - sn.t < SONG_URL_NEG_TTL) {
+          var snResp = makeJsonResponse(sn.d);
+          if (snResp) { try { mrNetRec(kind, key, performance.now() - tReq, true, 'neg'); } catch (e) { } return Promise.resolve(snResp); }
+        }
+        var sid = songUrlIdentity(absUrl);
+        var snId = sid ? state.urlNegById[sid] : null;
+        if (snId && now - snId.t < SONG_URL_ID_NEG_TTL) {
+          var snIdResp = makeJsonResponse(snId.d);
+          if (snIdResp) { try { mrNetRec(kind, key, performance.now() - tReq, true, 'neg'); } catch (e) { } return Promise.resolve(snIdResp); }
+        }
+      } else if (kind === 'lyric') {
+        var ln = state.lyricNeg[key];
+        if (ln && now - ln.t < LYRIC_EMPTY_NEG_TTL) {
+          var lnResp = makeJsonResponse(ln.d);
+          if (lnResp) { try { mrNetRec(kind, key, performance.now() - tReq, true, 'neg'); } catch (e) { } return Promise.resolve(lnResp); }
         }
       }
       /* 登录 / 登出：清掉状态缓存，避免刚登录仍显示未登录 */
@@ -389,17 +498,29 @@
       function storeResult(data) {
         try {
           if (kind === 'status') state.statusMem[key] = { t: Date.now(), d: data };
-          else if (kind === 'songurl') state.urlMem[key] = { t: Date.now(), d: data };
+          else if (kind === 'songurl') {
+            if (!isSongUrlFailure(data)) {
+              state.urlMem[key] = { t: Date.now(), d: data };
+              var okId = songUrlIdentity(absUrl);
+              if (okId) delete state.urlNegById[okId];
+            }
+          }
         } catch (e) { }
       }
 
       return (async function () {
-        var hit = state.mem[key];
-        if (hit && isSentinelPayload(hit.d)) { delete state.mem[key]; hit = null; }
-        if (hit && now - hit.t < state.ttl) {
+        var hit = bust ? null : state.mem[key];
+        var hitKind = (hit && hit.k) || kind;
+        if (hit && (isSentinelPayload(hit.d) || shouldNegCache(hitKind, hit.d))) { delete state.mem[key]; hit = null; }
+        if (hit && isUntrustedSearchPayload(hit.d)) {
+          /* 旧版本可能缓存过搜索空包：当作未命中并清掉，重新请求 */
+          delete state.mem[key];
+          hit = null;
+        }
+        if (hit && now - hit.t < ttlForKind(hitKind)) {
           storeResult(hit.d);
           var cachedResp = makeJsonResponse(hit.d);
-          if (cachedResp) { try { mrNetRec(kind, key, 0, true); } catch (e) { } return cachedResp; }
+          if (cachedResp) { try { mrNetRec(kind, key, performance.now() - tReq, true, 'mem'); } catch (e) { } return cachedResp; }
         }
         /* v95-C1：like/check 全部已知 → 本地合成 */
         if (kind === 'other' && /like\/check|\/like\b/.test(absUrl)) {
@@ -407,7 +528,7 @@
             var synth = mrLikeSynthesize(absUrl);
             if (synth) {
               mrNetStat.likeSkip += 1;
-              mrNetRec('like', absUrl, 0, true);
+              mrNetRec('like', absUrl, performance.now() - tReq, true, 'like');
               var sr = makeJsonResponse(synth);
               if (sr) return sr;
             }
@@ -419,20 +540,31 @@
             if (mrPlayPending.at) { mrNetStat.lyricDeferred += 1; await mrWaitPlayStarted(2500); }
           } catch (e) { }
         }
-        if (!hit) {
+        if (!hit && !bust) {
           var db0 = await ensureDb();
           if (db0) {
             var rec = await dbGet(db0, key);
+            var recKind = (rec && rec.kd) || (rec && rec.k) || kind;
             if (rec && isSentinelPayload(rec.d)) { rec = null; }
-          if (rec && rec.t && Date.now() - rec.t < state.ttl) {
-              state.mem[key] = { t: rec.t, d: rec.d };
+            if (rec && isUntrustedSearchPayload(rec.d)) { rec = null; }
+            if (rec && shouldNegCache(recKind, rec.d)) { rec = null; }
+            if (rec && rec.t && Date.now() - rec.t < ttlForKind(recKind)) {
+              state.mem[key] = { t: rec.t, d: rec.d, k: recKind };
               storeResult(rec.d);
               var resp1 = makeJsonResponse(rec.d);
-              if (resp1) return resp1;
+              if (resp1) { try { mrNetRec(kind, key, performance.now() - tReq, true, 'db'); } catch (e) { } return resp1; }
             }
           }
         }
 
+        /* v104-net：同一 URL 并发请求合并（下一首预解析 + 用户立刻点播放会同时打同一条取址） */
+        if ((kind === 'songurl' || kind === 'lyric') && state.inflight[key]) {
+          try { mrNetStat.dedupe = (mrNetStat.dedupe || 0) + 1; } catch (e) { }
+          return state.inflight[key].then(function (r) {
+            try { return r && r.clone ? r.clone() : r; } catch (e) { return r; }
+          });
+        }
+        var netPromise = (async function () {
         var fetchPromise = rawFetch.call(self, input, init);
         var res;
         if (kind === 'search') {
@@ -441,25 +573,54 @@
             fetchPromise.catch(function (e) { return { __mrErr: e }; }),
             new Promise(function (resolve) { setTimeout(function () { resolve({ __mrTimeout: 1 }); }, SEARCH_TIMEOUT); })
           ]);
-          if (res && res.__mrTimeout) return makeJsonResponse(emptySearchPayload());
-          if (res && res.__mrErr) throw res.__mrErr;
+          if (res && res.__mrTimeout) { try { mrNetRec(kind, key, performance.now() - tReq, false, 'timeout'); } catch (e) { } return makeJsonResponse(emptySearchPayload()); }
+          if (res && res.__mrErr) { try { mrNetRec(kind, key, performance.now() - tReq, false, 'err'); } catch (e) { } throw res.__mrErr; }
         } else {
-          res = await fetchPromise;
+          try {
+            res = await fetchPromise;
+          } catch (err) {
+            try { mrNetRec(kind, key, performance.now() - tReq, false, 'err'); } catch (e) { }
+            throw err;
+          }
         }
         try {
-          var __mrNetT0b = performance.now();
           if (res && res.ok) {
             var clone = res.clone();
             clone.json().then(function (data) {
-              try { mrNetRec(kind, key, performance.now() - __mrNetT0b, false); } catch (e) { }
+              try { mrNetRec(kind, key, performance.now() - tReq, false, 'net'); } catch (e) { }
               if (kind === 'other' && /like\/check|\/like\b/.test(absUrl)) mrLikeRememberFromResponse(data);
               if (isSentinelPayload(data)) return;
-              var item = { t: Date.now(), d: data };
+              /* v104：搜索空包永不进缓存（否则同一关键词 20 分钟内都空） */
+              if (isUntrustedSearchPayload(data)) return;
+              /* v104-net：失败包不进正式缓存（原来 url_unavailable / 空歌词会被缓存 20min） */
+              if (shouldNegCache(kind, data)) {
+                try {
+                  if (kind === 'songurl') {
+                    state.urlNeg[key] = { t: Date.now(), d: data };
+                    var failId = songUrlIdentity(absUrl);
+                    if (failId) state.urlNegById[failId] = { t: Date.now(), d: data };
+                    delete state.urlMem[key];
+                  } else if (kind === 'lyric') {
+                    state.lyricNeg[key] = { t: Date.now(), d: data };
+                  }
+                  mrNetStat.negStore = (mrNetStat.negStore || 0) + 1;
+                } catch (e) { }
+                return;
+              }
+              try {
+                if (kind === 'songurl') {
+                  delete state.urlNeg[key];
+                  var okId2 = songUrlIdentity(absUrl);
+                  if (okId2) delete state.urlNegById[okId2];
+                }
+                if (kind === 'lyric') delete state.lyricNeg[key];
+              } catch (e) { }
+              var item = { t: Date.now(), d: data, k: kind };
               state.mem[key] = item;
               storeResult(data);
               ensureDb().then(function (db2) {
                 if (!db2) return;
-                dbPut(db2, { k: key, t: item.t, d: item.d });
+                dbPut(db2, { k: key, t: item.t, d: item.d, kd: kind });
                 try {
                   var all = db2.transaction(state.store, 'readonly').objectStore(state.store).getAll();
                   all.onsuccess = function () {
@@ -472,9 +633,20 @@
                 } catch (e) { }
               });
             }).catch(function () { });
+          } else if (res) {
+            try { mrNetRec(kind, key, performance.now() - tReq, false, 'http' + res.status); } catch (e) { }
           }
         } catch (e) { }
         return res;
+        })();
+        if (kind === 'songurl' || kind === 'lyric') {
+          state.inflight[key] = netPromise;
+          var clearInflight = function () {
+            try { if (state.inflight[key] === netPromise) delete state.inflight[key]; } catch (e) { }
+          };
+          netPromise.then(clearInflight, clearInflight);
+        }
+        return netPromise;
       })();
     };
     state.wrapped = wrapped;
@@ -903,82 +1075,370 @@
     }).catch(function () { });
   }
 
+  /* ===== v104-search：搜索渐进策略（全平台并行 / 短预算 / 空包重取 / 失败可重试）=====
+     旧实现（v94）真机问题：
+       1) 酷狗先跑，6.5s 预算；失败再带 mrrerun 重试一次 6.5s → 冷缓存时 13s 才开始拉别的平台，
+         再串行等 6s → 用户最长看到 19s「正在搜索」；
+       2) 任何平台返回空包（含 v88 旧缓存里的 MR_SEARCH_TIMEOUT 哨兵）都被当成「没有结果」，
+          宿主直接渲染「没有找到相关歌曲」——这就是「明明有歌却一输入就空」的主因。
+     新实现：
+       1) 所有平台同一时刻并发（酷狗 3.8s、其它允许到 10.5s），谁的 songs 先到先渲染；
+          首个结果最多等 4s，其它平台后台增量补（mrMergeBackgroundSearch，不重排不闪烁）；
+       2) 4s 内没有任何歌时**不判空**：先把空态换成「网络较慢，仍在搜索…」+ 可点重试，
+          继续等第一轮在途请求（最多 11.2s，跨网实测网易云偶发 11.6s 才回）；
+       3) 只有「所有平台都正常返回空」才算真空态；「快速失败」（全部在本机 2.6s 内返回
+          错误/空包，通常是旧空包缓存残留）才带 mrrerun 自动重试一次 4s；
+       4) 终态失败时 window.searchProviderNotice 设成「网络较慢，点此重试」，
+          patchSearchFailSemantics 再把空态换成可点击重试按钮（带 mrrerun 重搜）。 */
+  var MR_SEARCH_LIMIT_DEFAULT = 12;
+  var MR_SEARCH_KUGOU_BUDGET = 3800;      /* 酷狗慢是常态：只给短预算，别拖整页 */
+  var MR_SEARCH_PROVIDER_BUDGET = 10500;  /* 其它平台允许慢（跨网实测网易云偶发 11.6s） */
+  var MR_SEARCH_FIRST_BUDGET = 4000;      /* 4s 内有歌立刻渲染；没有则先给「仍在搜索」提示 */
+  var MR_SEARCH_TOTAL_BUDGET = 11200;     /* 第一轮最多等这么久（低于缓存层 12s 哨兵） */
+  var MR_SEARCH_RETRY_BUDGET = 4000;
+  var MR_SEARCH_FAST_FAIL_MS = 2600;      /* 全套失败都发生在这个时间内 → 可能是旧空包缓存 */
+
+  function mrSearchBustUrl(url, stamp) {
+    if (!url) return url;
+    return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'mrrerun=' + (stamp || Date.now());
+  }
+
+  function mrSearchItemSongs(item) {
+    if (!item || !item.value) return [];
+    return Array.isArray(item.value.songs) ? item.value.songs : [];
+  }
+
+  /* 响应是否可信：超时、异常、{error}、非对象一律不可信（空包在缓存层已不存，这里再兜底） */
+  function mrSearchItemTrustworthy(item) {
+    if (!item) return false;
+    if (item.timeout || item.error) return false;
+    if (!item.value || typeof item.value !== 'object') return false;
+    if (item.value.error || item.value.ok === false) return false;
+    return true;
+  }
+
+  /* 单平台请求：限时 + 超时/错误结构化（不冒泡），bustSeed 非 0 时带 mrrerun 绕过缓存 */
+  function mrSearchRunProvider(provider, q, budget, bustSeed) {
+    var limit = MR_SEARCH_PAGE_LIMITS[provider] || MR_SEARCH_LIMIT_DEFAULT;
+    var url = '';
+    try { url = window.searchProviderUrl(provider, q, limit, 0); } catch (e) { url = ''; }
+    if (!url) return Promise.resolve({ provider: provider, limit: limit, value: null, error: 'NO_URL', ms: 0 });
+    if (bustSeed) url = mrSearchBustUrl(url, bustSeed);
+    var t0 = performance.now();
+    return Promise.race([
+      mrNetApiJson(url, budget).then(function (value) {
+        return { provider: provider, limit: limit, value: value || {}, url: url, ms: Math.round(performance.now() - t0) };
+      }).catch(function (err) {
+        return { provider: provider, limit: limit, value: null, url: url, ms: Math.round(performance.now() - t0), error: String((err && err.message) || err) };
+      }),
+      mrNetSearchTimeout(budget + 300).then(function () {
+        return { provider: provider, limit: limit, value: null, url: url, ms: Math.round(performance.now() - t0), timeout: true };
+      })
+    ]);
+  }
+
+  function mrSearchBuildResult(items, q) {
+    var pp = {};
+    var pools = { netease: [], qq: [], kugou: [], qishui: [], spotify: [] };
+    var extra = [];
+    (items || []).forEach(function (item) {
+      if (!item || !item.value) return;
+      var songs = Array.isArray(item.value.songs) ? item.value.songs : [];
+      pp[item.provider] = mrNetProviderPageInfo(item.value, item.limit);
+      if (pools[item.provider]) pools[item.provider] = pools[item.provider].concat(songs);
+      else extra = extra.concat(songs);
+    });
+    var songs = [];
+    try {
+      songs = window.mergeSongSearchResults(pools.netease, pools.qq, pools.kugou, pools.qishui, pools.spotify, 60, q).concat(extra);
+    } catch (e) { }
+    return { songs: songs, providerPages: pp, hasMore: false };
+  }
+
   function patchProgressiveSearch() {
-    if (window.__mrProgressiveSearch) return true;
+    if (window.__mrProgressiveSearchV104) return true;
     if (typeof window.fetchMusicSearchResults !== 'function') return false;
     if (typeof window.searchProviderUrl !== 'function' || typeof window.activeSearchProvidersForMode !== 'function') return false;
     if (typeof window.mergeSongSearchResults !== 'function') return false;
+    window.__mrProgressiveSearchV104 = 1;
     window.__mrProgressiveSearch = 1;
     var raw = window.fetchMusicSearchResults;
     window.fetchMusicSearchResults = async function (q, mode, previousPages) {
       try {
+        /* 翻页仍走宿主原逻辑（此时已有首屏结果，慢一点不影响） */
         if (previousPages) return raw.apply(this, arguments);
         var providers = window.activeSearchProvidersForMode(mode) || [];
-        if (providers.length < 2 || providers.indexOf('kugou') < 0) return raw.apply(this, arguments);
-        var limit = MR_SEARCH_PAGE_LIMITS.kugou || 12;
-        var kgUrl = window.searchProviderUrl('kugou', q, limit, 0);
-        var kg = await Promise.race([
-          mrNetApiJson(kgUrl, 6500).then(function (value) { return { value: value || {} }; }).catch(function () { return null; }),
-          mrNetSearchTimeout(6500)
-        ]);
-        var kgSongs = Array.isArray(kg && kg.value && kg.value.songs) ? kg.value.songs : [];
-        if (!kgSongs.length) {
-          /* 可能是历史空包缓存：加 cache-buster 再试一次 */
-          var bust = kgUrl + (kgUrl.indexOf('?') >= 0 ? '&' : '?') + 'mrrerun=' + Date.now();
-          var kg2 = await Promise.race([
-            mrNetApiJson(bust, 6500).then(function (value) { return { value: value || {} }; }).catch(function () { return null; }),
-            mrNetSearchTimeout(6500)
-          ]);
-          if (kg2 && kg2.value) { kg = kg2; kgSongs = Array.isArray(kg2.value.songs) ? kg2.value.songs : []; }
-        }
-        if (!kg || !kg.value) return raw.apply(this, arguments);
-        if (!kgSongs.length) {
-          /* 酷狗没结果：并行拿其它平台，6 秒预算，不再走 raw（raw 会等每个平台 12s） */
-          var restEarly = providers.filter(function (p) { return p !== 'kugou'; });
-          var early = await Promise.race([
-            Promise.all(restEarly.map(function (p) {
-              var lm = MR_SEARCH_PAGE_LIMITS[p] || 12;
-              var u;
-              try { u = window.searchProviderUrl(p, q, lm, 0); } catch (e) { u = ''; }
-              if (!u) return Promise.resolve(null);
-              return mrNetApiJson(u, 8000).then(function (value) { return { provider: p, value: value || {}, limit: lm }; }).catch(function () { return null; });
-            })),
-            mrNetSearchTimeout(6000)
-          ]);
-          var earlyList = Array.isArray(early) ? early : [];
-          var pp = {};
-          var pools = { netease: [], qq: [], kugou: [], qishui: [], spotify: [] };
-          var extra = [];
-          earlyList.forEach(function (item) {
-            if (!item || !item.value) return;
-            var ss = Array.isArray(item.value.songs) ? item.value.songs : [];
-            pp[item.provider] = mrNetProviderPageInfo(item.value, item.limit);
-            if (pools[item.provider]) pools[item.provider] = pools[item.provider].concat(ss);
-            else extra = extra.concat(ss);
-          });
-          var mergedEarly = window.mergeSongSearchResults(pools.netease, pools.qq, pools.kugou, pools.qishui, pools.spotify, 60, q).concat(extra);
-          return { songs: mergedEarly, providerPages: pp, hasMore: false };
-        }
-        var providerPages = {};
-        providerPages.kugou = mrNetProviderPageInfo(kg.value, limit);
-        var songs = window.mergeSongSearchResults([], [], kgSongs, [], [], 60, q);
-        var result = { songs: songs, providerPages: providerPages, hasMore: false };
-        try {
-          mrNetStat.searchMs.push(Math.round(performance.now() - (window.__mrSearchT0 || performance.now())));
-          if (mrNetStat.searchMs.length > 20) mrNetStat.searchMs.shift();
-        } catch (e) { }
-        var rest = providers.filter(function (p) { return p !== 'kugou'; });
+        if (providers.length < 2) return raw.apply(this, arguments);
+        var query = String(q || '').trim();
         var key = '';
-        try { key = window.searchResultKey(q, mode); } catch (e) { key = ''; }
-        if (key && rest.length) {
-          window.setTimeout(function () { mrMergeBackgroundSearch(q, mode, key, providerPages, rest); }, 60);
+        try { key = window.searchResultKey(query, mode); } catch (e) { key = ''; }
+        var forceBust = Number(window.__mrSearchBust) || 0;
+        if (forceBust) window.__mrSearchBust = 0;
+        var outcome = {
+          q: query, mode: mode, key: key, t0: performance.now(),
+          anySongs: false, failed: false, bust: forceBust, doneMs: 0
+        };
+        window.__mrSearchOutcome = outcome;
+        window.__mrSearchT0 = outcome.t0;
+        window.searchProviderNotice = '';
+
+        function finish(items, failed) {
+          var result = mrSearchBuildResult(items, query);
+          outcome.doneMs = Math.round(performance.now() - outcome.t0);
+          if (result.songs.length) {
+            outcome.anySongs = true;
+            try { mrNetStat.searchMs.push(outcome.doneMs); if (mrNetStat.searchMs.length > 20) mrNetStat.searchMs.shift(); } catch (e) { }
+            var doneSet = {};
+            (items || []).forEach(function (it) { if (it && it.provider) doneSet[it.provider] = 1; });
+            var rest = providers.filter(function (p) { return !doneSet[p]; });
+            if (key && rest.length) {
+              window.setTimeout(function () { mrMergeBackgroundSearch(query, mode, key, result.providerPages, rest); }, 80);
+            }
+          } else {
+            outcome.failed = !!failed;
+            if (failed) window.searchProviderNotice = '网络较慢，点此重试';
+          }
+          return result;
         }
-        return result;
+
+        /* ---- 第一轮：全平台同时发，先有歌先渲染 ---- */
+        var items = [];
+        var first = await Promise.race([
+          new Promise(function (resolve) {
+            var remaining = providers.length;
+            var settled = false;
+            providers.forEach(function (p) {
+              var budget = p === 'kugou' ? MR_SEARCH_KUGOU_BUDGET : MR_SEARCH_PROVIDER_BUDGET;
+              mrSearchRunProvider(p, query, budget, forceBust).then(function (item) {
+                items.push(item);
+                if (settled) return;
+                if (item.value && mrSearchItemSongs(item).length) { settled = true; resolve(item); }
+                else if (--remaining === 0) { settled = true; resolve(null); }
+              });
+            });
+          }),
+          mrNetSearchTimeout(MR_SEARCH_FIRST_BUDGET).then(function () { return undefined; })
+        ]);
+        if (first) {
+          /* 给「几乎同时到」的平台 ~200ms 汇合，尽量一次渲染，减少二次 append */
+          await Promise.race([
+            mrNetSearchTimeout(220),
+            new Promise(function (resolve) {
+              (function check() {
+                if (items.filter(function (it) { return it && it.value; }).length >= providers.length) return resolve();
+                window.setTimeout(check, 40);
+              })();
+            })
+          ]);
+          return finish(items, false);
+        }
+
+        /* ---- 4s 内没有歌：不急着判空，先给「网络较慢，仍在搜索」的可重试提示，继续等在途请求 ---- */
+        try { mrSearchShowSlowHint(query); } catch (e) { }
+        var slowHit = await Promise.race([
+          new Promise(function (resolve) {
+            (function check() {
+              for (var i = 0; i < items.length; i++) {
+                if (items[i] && items[i].value && mrSearchItemSongs(items[i]).length) return resolve(items[i]);
+              }
+              if (items.length >= providers.length) return resolve(null);
+              window.setTimeout(check, 60);
+            })();
+          }),
+          mrNetSearchTimeout(Math.max(800, MR_SEARCH_TOTAL_BUDGET - MR_SEARCH_FIRST_BUDGET)).then(function () { return undefined; })
+        ]);
+        if (slowHit) return finish(items, false);
+        var allSettled = items.length >= providers.length;
+        var allValidEmpty = allSettled && items.every(function (it) {
+          return mrSearchItemTrustworthy(it) && mrSearchItemSongs(it).length === 0;
+        });
+        if (allValidEmpty) return finish(items, false);
+        /* 只有「快速失败」才自动带 mrrerun 重试一次：慢网络下重试只会加重排队，直接给可重试提示 */
+        var elapsed = performance.now() - outcome.t0;
+        if (elapsed < MR_SEARCH_FAST_FAIL_MS) {
+          outcome.autoRetried = true;
+          var retrySeed = Date.now();
+          var retryItems = [];
+          var retryFirst = await Promise.race([
+            new Promise(function (resolve) {
+              var remaining = providers.length;
+              var settled = false;
+              providers.forEach(function (p) {
+                mrSearchRunProvider(p, query, MR_SEARCH_RETRY_BUDGET, retrySeed).then(function (item) {
+                  retryItems.push(item);
+                  if (settled) return;
+                  if (item.value && mrSearchItemSongs(item).length) { settled = true; resolve(item); }
+                  else if (--remaining === 0) { settled = true; resolve(null); }
+                });
+              });
+            }),
+            mrNetSearchTimeout(MR_SEARCH_RETRY_BUDGET + 500).then(function () { return undefined; })
+          ]);
+          var merged = items.concat(retryItems);
+          if (retryFirst) return finish(merged, false);
+          var retryValidEmpty = retryItems.length >= providers.length && retryItems.every(function (it) {
+            return mrSearchItemTrustworthy(it) && mrSearchItemSongs(it).length === 0;
+          });
+          return finish(merged, !retryValidEmpty);
+        }
+        return finish(items, true);
       } catch (e) {
         return raw.apply(this, arguments);
       }
     };
     return true;
+  }
+
+  /* ---- v104-search：空态语义 + 可点击重试 ----
+     宿主 doSearch 在 songs 为空时渲染「没有找到相关歌曲」（或 searchProviderNotice）。
+     我们只在「所有平台明确返回空」时保留原文案；超时/失败时换成可重试提示，
+     点击带 mrrerun 重搜（window.__mrSearchBust 由渐进搜索消费）。 */
+  function mrSearchEsc(s) {
+    try { if (typeof window.escHtml === 'function') return window.escHtml(String(s == null ? '' : s)); } catch (e) { }
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function mrSearchBindRetryBtn(btn, query) {
+    if (!btn) return;
+    btn.addEventListener('click', function (ev) {
+      try { ev.preventDefault(); ev.stopPropagation(); } catch (e) { }
+      window.__mrSearchBust = Date.now();
+      var inp = document.getElementById('search-input');
+      var target = query || String((inp && inp.value) || '').trim();
+      if (!target) return;
+      try { if (typeof window.doSearch === 'function') window.doSearch(target); } catch (e) { }
+    });
+  }
+
+  /* 慢网络中间态：4s 还没歌时先把「正在搜索」换成可重试提示（结果到了宿主会直接覆盖） */
+  function mrSearchShowSlowHint(q) {
+    var res = document.getElementById('search-results');
+    if (!res || res.querySelector('.search-result')) return;
+    var box = res.querySelector('.search-empty:not(.search-load-more)');
+    if (!box || box.querySelector('.mr-search-slow')) return;
+    box.classList.add('mr-search-slow');
+    box.innerHTML = '<div class="mr-search-slow-text">网络较慢，仍在搜索 “' + mrSearchEsc(q) + '”…</div>' +
+      '<button type="button" class="mr-search-retry-btn mr-search-slow-btn">点此重试</button>';
+    mrSearchBindRetryBtn(box.querySelector('.mr-search-slow-btn'), q);
+  }
+
+  function mrSearchDecorateEmpty(q) {
+    var o = window.__mrSearchOutcome;
+    if (!o || !o.failed) return;
+    var query = String(q || '').trim();
+    if (query && o.q && query !== o.q) return;
+    var res = document.getElementById('search-results');
+    if (!res || res.querySelector('.search-result')) return;
+    var box = res.querySelector('.search-empty:not(.search-load-more)');
+    if (!box || box.querySelector('.mr-search-retry')) return;
+    box.classList.add('mr-search-retry');
+    box.innerHTML = '<div class="mr-search-retry-title">网络较慢，没能加载到歌曲</div>' +
+      '<button type="button" class="mr-search-retry-btn">点此重试</button>' +
+      (o.autoRetried ? '<div class="mr-search-retry-sub">已自动重试过一次</div>' : '');
+    mrSearchBindRetryBtn(box.querySelector('.mr-search-retry-btn'), query);
+  }
+
+  function patchSearchFailSemantics() {
+    if (window.__mrSearchSemantics) return true;
+    if (typeof window.doSearch !== 'function') return false;
+    window.__mrSearchSemantics = 1;
+    var rawDoSearch = window.doSearch;
+    window.doSearch = async function (q) {
+      var args = arguments;
+      var input = document.getElementById('search-input');
+      var query = String(q != null ? q : (input && input.value) || '').trim();
+      try {
+        return await rawDoSearch.apply(this, args);
+      } finally {
+        try { mrSearchDecorateEmpty(query); } catch (e) { }
+      }
+    };
+    return true;
+  }
+
+  /* v104-net：下一首歌词/封面预取（起播让路，播放稳定后空闲期才打） */
+  var mrPrefetchAuxState = { lyricUrl: '', coverUrl: '' };
+  function mrNextQueueSongForPrefetch() {
+    try {
+      var q = window.playQueue;
+      var idx = window.currentIdx;
+      if (!q || !q.length || typeof idx !== 'number' || idx < 0) return null;
+      var next = q[idx + 1];
+      if (!next) return null;
+      if (next.type === 'local' || next.source === 'local' || next.localUrl) return null;
+      return next;
+    } catch (e) { return null; }
+  }
+  function mrPrefetchNextLyric() {
+    try {
+      var next = mrNextQueueSongForPrefetch();
+      if (!next) return;
+      if (typeof window.lyricEndpointForSong !== 'function') return;
+      var url = '';
+      try { url = window.lyricEndpointForSong(next); } catch (e) { url = ''; }
+      if (!url || mrPrefetchAuxState.lyricUrl === url) return;
+      mrPrefetchAuxState.lyricUrl = url;
+      /* 走补丁缓存层：切歌时宿主再请求同一条 URL 就是 0ms 命中（冷歌词实测 1.9s） */
+      try { fetch(url).catch(function () { }); } catch (e) { }
+    } catch (e) { }
+  }
+  function mrPrefetchNextCover() {
+    try {
+      if (typeof window.__mrLoadCoverObjectUrl !== 'function') return;
+      var next = mrNextQueueSongForPrefetch();
+      if (!next) return;
+      var src = '';
+      try { src = typeof window.songCoverSrc === 'function' ? window.songCoverSrc(next, 400) : ''; } catch (e) { src = ''; }
+      if (!src || src.indexOf('http') !== 0) return;
+      if (mrPrefetchAuxState.coverUrl === src) return;
+      mrPrefetchAuxState.coverUrl = src;
+      /* 原生桥取字节 → dataURI；shim 内有 24 条缓存，切歌时封面直接命中 */
+      try { window.__mrLoadCoverObjectUrl(src).catch(function () { }); } catch (e) { }
+    } catch (e) { }
+  }
+
+  /* v104-net P3：冷启动空闲期预取当前曲（用户点播放时取址已是缓存命中） */
+  var mrBootPrefetchState = { done: '', timer: 0, info: null };
+  function mrPrefetchCurrentTrack(reason) {
+    try {
+      if (document.hidden) return false;
+      if (typeof window.resolveAlbumGaplessPlaybackData !== 'function') return false;
+      if (mrPlayPending.at) return false;          /* 用户正在起播：让宿主自己解析，别重复 */
+      var q = window.playQueue;
+      var idx = window.currentIdx;
+      if (!q || !q.length || typeof idx !== 'number' || idx < 0) return false;
+      var cur = q[idx];
+      if (!cur) return false;
+      if (cur.type === 'local' || cur.source === 'local' || cur.localUrl) return false;
+      var a = window.audio;
+      if (a && !a.paused && (a.currentTime || 0) > 0) return false;
+      var key = String(cur.hash || cur.mid || cur.id || '') + '|' + String(cur.name || '') + '|' + idx;
+      if (mrBootPrefetchState.done === key) return false;
+      mrBootPrefetchState.done = key;
+      var t0 = performance.now();
+      window.resolveAlbumGaplessPlaybackData(cur).then(function (data) {
+        var info = { key: key, ms: Math.round(performance.now() - t0), ok: !!(data && data.url), reason: reason };
+        mrBootPrefetchState.info = info;
+        try { mrNetStat.bootPrefetch = info; } catch (e) { }
+      }).catch(function () {
+        mrBootPrefetchState.info = { key: key, ms: Math.round(performance.now() - t0), ok: false, err: 1, reason: reason };
+        try { mrNetStat.bootPrefetch = mrBootPrefetchState.info; } catch (e) { }
+      });
+      return true;
+    } catch (e) { return false; }
+  }
+  function mrScheduleBootPrefetch() {
+    /* v104 实测：跨网（柏林→国内 350ms RTT）冷启 4.5s 预取一次耗时 5.8s 且失败，
+       而原生桥是串行的（并发 3 条 wall 1394ms），会占用首屏之后的请求通道 → **默认关闭**。
+       需要时置 window.__mrBootPrefetch = 1 打开（v105 计划改成「进入播放页/点播放时才预取」）。 */
+    if (!window.__mrBootPrefetch) return;
+    if (mrBootPrefetchState.timer) return;
+    mrBootPrefetchState.timer = 1;
+    /* 4.5s：首屏网络（首页推荐/歌单）基本结束；9s：队列恢复晚或首发失败时补一枪 */
+    window.setTimeout(function () { try { mrPrefetchCurrentTrack('boot-4.5s'); } catch (e) { } }, 4500);
+    window.setTimeout(function () { try { mrPrefetchCurrentTrack('boot-9s'); } catch (e) { } }, 9000);
   }
 
   /* 下一首预解析：复用宿主自己的解析函数 → 命中我们的 song/url 缓存 */
@@ -1013,12 +1473,17 @@
       if (!t || t.tagName !== 'AUDIO') return;
       if (mrPrefetchState.key && mrPrefetchState.key.indexOf('|') > 0) mrPrefetchState.key = '';
       window.setTimeout(mrPrefetchNextTrack, 200);
+      /* v104-net：播放稳定后再预取下一首歌词/封面，避免抢起播的 /api 往返 */
+      window.setTimeout(mrPrefetchNextLyric, 2300);
+      window.setTimeout(mrPrefetchNextCover, 2800);
     }, true);
     document.addEventListener('click', function (ev) {
       var t = ev.target;
       if (!t || !t.closest) return;
       if (t.closest('#play-btn, .control-prev, .control-next, .song-next, .queue-item')) {
         mrPrefetchState.key = '';
+        mrPrefetchAuxState.lyricUrl = '';
+        mrPrefetchAuxState.coverUrl = '';
         window.setTimeout(mrPrefetchNextTrack, 2500);
       }
     }, true);
@@ -1030,16 +1495,66 @@
      C1：like/check 合并防抖 + 按 hash 记忆（同一批 hash 再次出现直接本地合成响应）；
      C2：歌词请求在「正在起播」期间延后到真正出声之后（最多 2.5s）。
      F ：把 /api 请求耗时、搜索首条耗时、起播耗时、音频缓存状态收在一张小面板里（三点菜单→网络）。 */
-  var MR_NET_KEEP = 160;
+  var MR_NET_KEEP = 200;
   var mrNetStat = (window.__mrNetStats = window.__mrNetStats || {
-    reqs: [], searchMs: [], playMs: [], likeSkip: 0, lyricDeferred: 0
+    reqs: [], searchMs: [], playMs: [], likeSkip: 0, lyricDeferred: 0,
+    dedupe: 0, negHit: 0, negStore: 0, err: 0, timeout: 0,
+    hits: { mem: 0, db: 0, neg: 0, like: 0 }
   });
+  try {
+    /* 老会话（升级前已创建）补齐 v104-net 新字段 */
+    if (!mrNetStat.hits) mrNetStat.hits = { mem: 0, db: 0, neg: 0, like: 0 };
+    if (mrNetStat.dedupe == null) mrNetStat.dedupe = 0;
+    if (mrNetStat.negHit == null) mrNetStat.negHit = 0;
+    if (mrNetStat.negStore == null) mrNetStat.negStore = 0;
+    if (mrNetStat.err == null) mrNetStat.err = 0;
+    if (mrNetStat.timeout == null) mrNetStat.timeout = 0;
+  } catch (e) { }
 
-  function mrNetRec(kind, url, ms, cached) {
+  /* v104-net：机器可读的网络摘要（真机脚本/回归直接读，不必解析面板 DOM） */
+  function mrNetSummary() {
+    var st = mrNetStat;
+    var agg = {};
+    (st.reqs || []).forEach(function (r) {
+      var k = r.k || 'other';
+      if (!agg[k]) agg[k] = { n: 0, hits: 0, netMs: 0, netN: 0 };
+      agg[k].n += 1;
+      if (r.c) agg[k].hits += 1;
+      else { agg[k].netN += 1; agg[k].netMs += (r.ms || 0); }
+    });
+    Object.keys(agg).forEach(function (k) {
+      var a = agg[k];
+      a.avgNetMs = a.netN ? Math.round(a.netMs / a.netN) : 0;
+      delete a.netMs;
+    });
+    return {
+      total: (st.reqs || []).length,
+      hits: st.hits || {}, dedupe: st.dedupe || 0, negHit: st.negHit || 0,
+      negStore: st.negStore || 0, err: st.err || 0, timeout: st.timeout || 0,
+      likeSkip: st.likeSkip || 0, lyricDeferred: st.lyricDeferred || 0,
+      playMs: (st.playMs || []).slice(-10), searchMs: (st.searchMs || []).slice(-10),
+      byKind: agg
+    };
+  }
+  try { window.__mrNetSummary = mrNetSummary; } catch (e) { }
+
+  function mrNetRec(kind, url, ms, cached, src) {
     try {
       var list = mrNetStat.reqs;
-      list.push({ k: kind, u: String(url || '').slice(0, 120), ms: Math.round(ms), c: !!cached, t: Date.now() });
+      var msR = Math.round(ms);
+      var from = src || '';
+      list.push({ k: kind, u: String(url || '').slice(0, 120), ms: msR, c: !!cached, s: from, t: Date.now() });
       if (list.length > MR_NET_KEEP) list.splice(0, list.length - MR_NET_KEEP);
+      var st = mrNetStat;
+      if (!st.hits) st.hits = { mem: 0, db: 0, neg: 0, like: 0 };
+      if (cached) {
+        if (from === 'db') st.hits.db += 1;
+        else if (from === 'neg') st.hits.neg += 1;
+        else if (from === 'like') st.hits.like += 1;
+        else st.hits.mem += 1;
+      }
+      if (from === 'err') st.err = (st.err || 0) + 1;
+      if (from === 'timeout') st.timeout = (st.timeout || 0) + 1;
     } catch (e) { }
   }
 
@@ -1171,6 +1686,45 @@
     return true;
   }
 
+  /* ---- v104-net：CDN 地址过期（audio 报错）→ 作废对应 song/url 缓存，防反复失败 ---- */
+  var mrSongUrlInvalidateBound = 0;
+  function mrBindSongUrlInvalidate() {
+    if (mrSongUrlInvalidateBound) return true;
+    mrSongUrlInvalidateBound = 1;
+    document.addEventListener('error', function (ev) {
+      var t = ev.target;
+      if (!t || t.tagName !== 'AUDIO') return;
+      try {
+        var src = String(t.currentSrc || t.src || '');
+        if (!src || src.indexOf('/api/') === 0) return;
+        var st = window.__mrApiCacheState;
+        if (!st) return;
+        var dirty = [];
+        Object.keys(st.urlMem || {}).forEach(function (k) {
+          var rec = st.urlMem[k];
+          if (rec && rec.d && rec.d.url === src) { delete st.urlMem[k]; dirty.push(k); }
+        });
+        Object.keys(st.mem || {}).forEach(function (k) {
+          var rec = st.mem[k];
+          if (rec && rec.d && rec.d.url === src) delete st.mem[k];
+        });
+        try { st.urlNeg = Object.create(null); } catch (e) { }
+        try { st.urlNegById = Object.create(null); } catch (e) { }
+        if (dirty.length && st.dbPromise) {
+          st.dbPromise.then(function (db) {
+            if (!db) return;
+            try {
+              var tx = db.transaction(st.store, 'readwrite');
+              dirty.forEach(function (k) { try { tx.objectStore(st.store).delete(k); } catch (e) { } });
+            } catch (e) { }
+          });
+        }
+        try { mrNetRec('songurl', src, 0, false, 'invalidate'); } catch (e) { }
+      } catch (e) { }
+    }, true);
+    return true;
+  }
+
   /* ---- 面板 UI ---- */
   var mrNetPanelEl = null;
   function mrNetPanelHtml() {
@@ -1185,6 +1739,18 @@
     var lastPlay = st.playMs.length ? st.playMs[st.playMs.length - 1] : null;
     var slow = st.reqs.slice().sort(function (a, b) { return b.ms - a.ms; }).slice(0, 8);
     var cacheHits = st.reqs.filter(function (r) { return r.c; }).length;
+    var hits = st.hits || { mem: 0, db: 0, neg: 0, like: 0 };
+    /* v104-net：按 kind 的实际网络耗时平均（不含缓存命中），起播/歌词/封面一眼可见 */
+    var kindAgg = {};
+    st.reqs.forEach(function (r) {
+      if (r.c) return;
+      var k = r.k || 'other';
+      if (!kindAgg[k]) kindAgg[k] = { n: 0, ms: 0 };
+      kindAgg[k].n += 1; kindAgg[k].ms += (r.ms || 0);
+    });
+    var kindAvgText = Object.keys(kindAgg).map(function (k) {
+      return k + ' ' + Math.round(kindAgg[k].ms / kindAgg[k].n) + 'ms';
+    }).slice(0, 4).join(' · ');
     var cacheInfo = 'n/a';
     try {
       if (window.mrAudioCacheStats) {
@@ -1202,9 +1768,10 @@
       '<div class="mr-net-grid">' +
       '<div><b>' + (lastSearch == null ? '—' : lastSearch + 'ms') + '</b><small>搜索首条（均 ' + (avg(st.searchMs) == null ? '—' : avg(st.searchMs) + 'ms') + '）</small></div>' +
       '<div><b>' + (lastPlay == null ? '—' : lastPlay + 'ms') + '</b><small>起播（均 ' + (avg(st.playMs) == null ? '—' : avg(st.playMs) + 'ms') + '）</small></div>' +
-      '<div><b>' + cacheHits + ' / ' + st.reqs.length + '</b><small>请求缓存命中</small></div>' +
-      '<div><b>' + st.likeSkip + '</b><small>like 请求省掉</small></div>' +
+      '<div><b>' + cacheHits + ' / ' + st.reqs.length + '</b><small>缓存命中 mem ' + hits.mem + ' · db ' + hits.db + ' · neg ' + hits.neg + '</small></div>' +
+      '<div><b>' + st.likeSkip + '</b><small>like 省掉 · 去重 ' + (st.dedupe || 0) + '</small></div>' +
       '</div>' +
+      '<div class="mr-net-sec">平均网络耗时：' + (kindAvgText || '—') + (st.negStore ? ' · 失败未缓存 ' + st.negStore : '') + '</div>' +
       '<div class="mr-net-sec">音频缓存：' + cacheInfo + '</div>' +
       '<div class="mr-net-sec">最慢请求 Top 8</div>' +
       rows +
@@ -1227,6 +1794,9 @@
         if (t.closest('[data-mr-net-clear]')) {
           mrNetStat.reqs.length = 0; mrNetStat.searchMs.length = 0; mrNetStat.playMs.length = 0;
           mrNetStat.likeSkip = 0; mrNetStat.lyricDeferred = 0;
+          mrNetStat.dedupe = 0; mrNetStat.negHit = 0; mrNetStat.negStore = 0;
+          mrNetStat.err = 0; mrNetStat.timeout = 0;
+          mrNetStat.hits = { mem: 0, db: 0, neg: 0, like: 0 };
           mrNetPanelRender();
         }
       });
@@ -4081,51 +4651,41 @@
   /* 手机上「词」按钮没有 hover：点一下同时展开歌词校准弹层 */
   /* 音量按钮：自己做开关（宿主 toggle 在手机上不总是关得掉） */
   /* 暂停立即切换图标：正在播放时直接 pause，不等淡出 */
-  /* 歌单/接口结果本地缓存，减少每次打开都重新拉取 */
-  /* 原生 bridge 请求缓存：歌单/推荐等 GET 结果存本地，打开歌单不再每次重新拉 */
-  function patchApiCache() {
-    if (window.__mrApiCache) return;
-    var raw = window.fetch;
-    if (typeof raw !== 'function') return;
-    window.__mrApiCache = 1;
-    var TTL = 6 * 3600 * 1000;
-    var makeResp = function (payload) {
-      return {
-        ok: true, status: 200, statusText: 'OK',
-        headers: { get: function (n) { return String(n).toLowerCase() === 'content-type' ? 'application/json; charset=utf-8' : null; } },
-        json: function () { return Promise.resolve(payload); },
-        text: function () { return Promise.resolve(JSON.stringify(payload)); },
-        clone: function () { return makeResp(payload); }
-      };
-    };
-    window.fetch = function (input, init) {
-      var url = typeof input === 'string' ? input : ((input && input.url) || '');
-      var method = (init && init.method) || 'GET';
-      var cacheable = method.toUpperCase() === 'GET' && /\/api\//.test(url) && !/cover|image|img|avatar|binary/i.test(url);
-      var key = 'mr-api-cache:' + url;
-      if (cacheable) {
-        try {
-          var rec = JSON.parse(localStorage.getItem(key) || 'null');
-          if (rec && Date.now() - rec.t < TTL) return Promise.resolve(makeResp(rec.d));
-        } catch (e) { }
+  /* ===== v104-net P1：删除 v88 的 localStorage /api 缓存层 =====
+     v88 这层（TTL 6h、key 不归一化、失败/空包也缓存）叠在 v94 的 mem+IndexedDB 缓存
+     【内层】：v94 未命中时会先落到它，于是 6 小时前的旧包/空包被当成"新鲜数据"，再被
+     v94 缓存 20 分钟。真机实测：259 条 mr-api-cache: 里 109 条是搜索，其中多条是
+     {ok:false, error:'MR_SEARCH_TIMEOUT', songs:[]} —— v94 明确拒绝缓存的超时空包被它
+     存了下来，这是「明明有歌却提示没有找到相关歌曲」持续复现的另一半根因。
+     处理：只保留 v94 的 mem+IndexedDB 缓存（__mrApiCacheState，TTL 20min）作为唯一
+     /api 缓存层；升级时把老用户机器上 `mr-api-cache:` 前缀的键全部清掉（否则旧空包
+     还能继续毒 6 小时）。搜索的空包/TTL 策略由 search-dev 负责，这里只删缓存层，
+     不动 kind==='search' 判定。 */
+  var MR_LEGACY_API_CACHE_PREFIX = 'mr-api-cache:';
+  var MR_API_CACHE_MIGRATE_KEY = 'mr-api-cache-migrate-v104';
+  function mrMigrateApiCacheV104() {
+    try {
+      if (localStorage.getItem(MR_API_CACHE_MIGRATE_KEY) === '1') return 0;
+    } catch (e) { }
+    var removed = 0;
+    var bytes = 0;
+    try {
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(MR_LEGACY_API_CACHE_PREFIX) === 0) keys.push(k);
       }
-      var out = raw.apply(this, arguments);
-      if (cacheable && out && typeof out.then === 'function') {
-        return out.then(function (res) {
-          try {
-            if (res && typeof res.clone === 'function') {
-              res.clone().json().then(function (data) {
-                try {
-                  localStorage.setItem(key, JSON.stringify({ t: Date.now(), d: data }));
-                } catch (e) { }
-              }).catch(function () { });
-            }
-          } catch (e) { }
-          return res;
-        });
+      for (var j = 0; j < keys.length; j++) {
+        try { bytes += keys[j].length + (localStorage.getItem(keys[j]) || '').length; } catch (e2) { }
+        try { localStorage.removeItem(keys[j]); removed += 1; } catch (e3) { }
       }
-      return out;
-    };
+      try { localStorage.setItem(MR_API_CACHE_MIGRATE_KEY, '1'); } catch (e4) { }
+    } catch (e5) { }
+    try {
+      window.__mrLegacyApiCachePurged = (window.__mrLegacyApiCachePurged || 0) + removed;
+      window.__mrLegacyApiCachePurgedBytes = (window.__mrLegacyApiCachePurgedBytes || 0) + bytes;
+    } catch (e6) { }
+    return removed;
   }
 
   /* 抑制「已关闭 Home / 已回到首页」这类提示 */
@@ -4638,12 +5198,157 @@
     window.addEventListener('touchcancel', function () { active = false; }, { capture: true, passive: true });
   }
 
+  /* ===== v104：面板打开动画期间的重渲染时序（平台推荐 / 歌单·音乐库）=====
+     用户反馈「打开面板时动画会卡一下」。2026-11 真机 CDP Trace 归因（帧间隔 × 渲染线程对齐）：
+       1) 平台推荐/音乐发现：.show 触发 0.34s sheet 动画的同时，宿主立刻 loadHomePlatformRecommendations()，
+          缓存命中后 60~90ms 内就重建整份列表 innerHTML（6 歌单卡 + 12 首日推 + 6 电台，封面是
+          background-image）。Trace 里这段同时出现 ImageDecodeTask 54.6ms + GpuImageDecodeCache::UploadImage
+          24.3ms + 渲染线程 DrawFn_DrawGL 31.4ms → 打开动画里掉 1~2 帧（最坏 148ms 空档）。
+       2) 歌单/音乐库：打开时宿主 refreshUserPlaylists 的异步链在 100ms 内连续调用
+          renderUserPlaylistsList 5 次（v87 全量模式下每次 15~27ms，合计约 68ms），全落在动画窗口里。
+     改法（不改动画时长与手感，sheet 仍是 0.34s cubic-bezier(.22,.9,.25,1)）：
+       a) 平台推荐：列表里已有上次渲染的内容时，打开动画期间一律不重建（直接复用旧 DOM，不闪 loading），
+          等 460ms（0.34s 动画 + 120ms 余量）后再重建一次；列表为空（冷启动后首开）时只立即渲染
+          一次 loading 态（很便宜），其余同样推迟。关闭面板会丢弃挂起的重建。
+       b) 歌单列表：面板打开后 800ms 窗口内，第一次调用延迟到下一个 rAF 立即执行（首屏不空），
+          其余重复调用只保留最后一次参数、合并后在 150ms 尾随定时器里执行一次。
+          reset / preserveScroll 这类会改变滚动位置的语义保守取并集（任一调用要求 reset 就 reset）。
+     风险：a) 面板打开后 460ms 内先点平台 tab，新平台的列表重建也会等到窗口结束（旧列表先显示）；
+           b) 打开后 800ms 内的列表渲染最多延后 150ms（对用户操作无感，滚动不会触发重建）。
+           两处都可回滚：删掉 patchMotionPanelRender 调用即恢复原时序。 */
+  function patchMotionPanelRender() {
+    if (window.__mrMotionRenderPatched) return true;
+    window.__mrMotionRenderPatched = 1;
+
+    /* --- a) 平台推荐 / 音乐发现面板 --- */
+    if (typeof window.openHomePlatformRecommendations === 'function'
+      && typeof window.renderHomePlatformRecommendations === 'function'
+      && !window.__mrPlatformRenderDefer) {
+      window.__mrPlatformRenderDefer = 1;
+      var platRawOpen = window.openHomePlatformRecommendations;
+      var platRawRender = window.renderHomePlatformRecommendations;
+      var platState = { opening: false, deferAll: false, renders: 0, pending: false, timer: 0 };
+      var platFlush = function () {
+        platState.opening = false;
+        platState.deferAll = false;
+        platState.renders = 0;
+        if (platState.timer) { try { window.clearTimeout(platState.timer); } catch (e) { } platState.timer = 0; }
+        if (!platState.pending) return;
+        platState.pending = false;
+        var mask = document.getElementById('home-platform-recommend-mask');
+        if (!mask || !mask.classList.contains('show')) return;   /* 已经关了就不补渲染，别在关闭动画里加活 */
+        try { platRawRender.call(window); } catch (e) { }
+      };
+      window.openHomePlatformRecommendations = function () {
+        var list = document.getElementById('home-platform-recommend-list');
+        /* 有上次渲染的内容 → 动画期间直接复用，不重建；空列表 → 先给一次 loading 态 */
+        platState.deferAll = !!(list && list.children && list.children.length > 0
+          && !list.querySelector('.home-platform-recommend-loading'));
+        platState.opening = true;
+        platState.renders = 0;
+        platState.pending = false;
+        if (platState.timer) { try { window.clearTimeout(platState.timer); } catch (e) { } platState.timer = 0; }
+        platState.timer = window.setTimeout(platFlush, 460);
+        return platRawOpen.apply(this, arguments);
+      };
+      window.renderHomePlatformRecommendations = function () {
+        if (platState.opening) {
+          platState.renders++;
+          /* 只在「列表已有上次渲染内容、直接复用旧 DOM」时推迟；冷启动首开（列表空）
+             保持宿主原时序（loading 态 + 立刻渲染），避免把重建推迟到动画结束后单独卡一下。 */
+          if (platState.deferAll) {
+            platState.pending = true;
+            return undefined;
+          }
+        }
+        return platRawRender.apply(this, arguments);
+      };
+      /* 关闭时清掉挂起的重建（下次打开会重新 loadHomePlatformRecommendations） */
+      if (typeof window.closeHomePlatformRecommendations === 'function') {
+        var platRawClose = window.closeHomePlatformRecommendations;
+        window.closeHomePlatformRecommendations = function () {
+          platState.pending = false;
+          platState.opening = false;
+          platState.deferAll = false;
+          if (platState.timer) { try { window.clearTimeout(platState.timer); } catch (e) { } platState.timer = 0; }
+          return platRawClose.apply(this, arguments);
+        };
+      }
+    }
+
+    /* --- b) 歌单 / 音乐库面板 --- */
+    if (typeof window.renderUserPlaylistsList === 'function' && !window.__mrPlRenderCoalesce) {
+      window.__mrPlRenderCoalesce = 1;
+      /* 记录歌单面板打开时刻（打开后的重渲染才合并，平时渲染语义不变） */
+      if (typeof window.setPeek === 'function' && !window.__mrPlOpenStamp) {
+        window.__mrPlOpenStamp = 1;
+        var rawSetPeek = window.setPeek;
+        window.setPeek = function (elem, on, key) {
+          if (on && (key === 'pl' || (elem && elem.id === 'playlist-panel'))) window.__mrPlOpenAt = Date.now();
+          return rawSetPeek.apply(this, arguments);
+        };
+      }
+      var plRawRender = window.renderUserPlaylistsList;
+      var plPending = null;
+      var plRaf = 0;
+      var plTail = 0;
+      var plRun = function (args) { try { plRawRender.apply(window, args); } catch (e) { } };
+      var plCoalesceActive = function () {
+        return !!(window.__mrPlOpenAt && (Date.now() - window.__mrPlOpenAt) < 800);
+      };
+      var plMergeArgs = function (older, newer) {
+        try {
+          var a = older && older[0];
+          var b = newer && newer[0];
+          if (a && b && typeof a === 'object' && typeof b === 'object') {
+            var out = {};
+            for (var k in b) { if (Object.prototype.hasOwnProperty.call(b, k)) out[k] = b[k]; }
+            if (a.reset && !out.reset) { out.reset = true; out.preserveScroll = false; }
+            return [out];
+          }
+        } catch (e) { }
+        return newer;
+      };
+      window.renderUserPlaylistsList = function () {
+        /* 平时（非打开窗口）保持原样同步渲染：宿主可能在 render 之后立刻量 DOM */
+        if (!plCoalesceActive()) {
+          if (plPending) { plPending = null; return undefined; }
+          return plRawRender.apply(this, arguments);
+        }
+        var args = [].slice.call(arguments);
+        if (plPending) {                       /* 已有排队：只留最后一次参数（合并滚动语义） */
+          plPending = plMergeArgs(plPending, args);
+          return undefined;
+        }
+        plPending = args;
+        if (plRaf || plTail) return undefined;
+        plRaf = window.requestAnimationFrame(function () {
+          plRaf = 0;
+          if (!plPending) { if (plTail) { try { window.clearTimeout(plTail); } catch (e) { } plTail = 0; } return; }
+          var a = plPending;
+          plPending = null;
+          plRun(a);
+          plTail = window.setTimeout(function () {
+            plTail = 0;
+            if (!plPending) return;
+            var b = plPending;
+            plPending = null;
+            plRun(b);
+          }, 150);
+        });
+        return undefined;
+      };
+    }
+    return true;
+  }
+
   /* ---- §14 入口 ---- */
   ready(function () {
     window.__mrStructDirty = 1;
     ensureClasses();
     mrLocalStorageBoot();
     installApiFetchCache();
+    try { mrBindSongUrlInvalidate(); } catch (e) { }
     try { installPlaylistFullRender(); } catch (e) { }
     buildChrome();
     initDiyConsole();
@@ -4670,6 +5375,7 @@
     bindSearchPlayEnter();
     try { patchHomeHeroMedia(); } catch (e) { }
     try { patchProgressiveSearch(); } catch (e) { }
+    try { patchSearchFailSemantics(); } catch (e) { }
     try { patchLikeStatusSync(); } catch (e) { }
     try { patchHotkeyRemoval(); } catch (e) { }
     try { patchHomeLibraryEntry(); } catch (e) { }
@@ -4685,12 +5391,14 @@
       try { patchSearchPauseForVoice(); } catch (e) { }
     }, 2500); } catch (e) { }
     try { patchPlatformPanelAnimation(); } catch (e) { }
+    try { patchMotionPanelRender(); } catch (e) { }
     try { patchHomeBlankDismiss(); } catch (e) { }
     try { window.setTimeout(function () { try { patchHotkeyRemoval(); } catch (e) { } try { patchPlatformPanelAnimation(); } catch (e) { } try { patchHomeBlankDismiss(); } catch (e) { } }, 2000); } catch (e) { }
     try { patchNetStatsUi(); } catch (e) { }
     try { window.setTimeout(function () { try { patchLikeStatusSync(); } catch (e) { } try { patchNetStatsUi(); } catch (e) { } }, 2500); } catch (e) { }
     try { patchNextTrackPrefetch(); } catch (e) { }
-    try { window.setTimeout(function () { try { patchProgressiveSearch(); } catch (e) { } mrWarmConnections(); }, 3000); } catch (e) { }
+    try { mrScheduleBootPrefetch(); } catch (e) { }
+    try { window.setTimeout(function () { try { patchProgressiveSearch(); } catch (e) { } try { patchSearchFailSemantics(); } catch (e) { } mrWarmConnections(); }, 3000); } catch (e) { }
     bindHostNavTriggers();
     bindStageGuard();
     bindDiyTap();
@@ -4698,7 +5406,7 @@
     bindStageDrag();
     patchPlaylistEdgeTrigger();
     bindPlayerPopovers();
-    patchApiCache();
+    try { mrMigrateApiCacheV104(); } catch (e) { }
     patchHomeToast();
     tuneRendererOnce();
     tuneAudioFade();

@@ -2839,3 +2839,68 @@ html.control-glass-svg-ok body.phone-shell #fx-panel{
 }
 html body.phone-shell #playlist-panel{ background: rgba(7, 12, 15, .985)!important; }
 html body.phone-shell #fx-panel{ background: rgba(9, 13, 17, .975)!important; }
+
+/* ===== v104：搜索失败态（网络慢/超时，不是「没有找到」） =====
+   宿主搜到空列表时渲染 .search-empty；超时/失败时 mr-phone.js 加 .mr-search-retry
+   换成「网络较慢，没加载到歌曲 + 点此重试」，点按钮带 mrrerun 重搜。 */
+body.phone-shell #search-results .search-empty.mr-search-retry{
+  display:flex!important;
+  flex-direction:column!important;
+  align-items:center!important;
+  justify-content:center!important;
+  gap:10px!important;
+  padding:34px 20px!important;
+  min-height:150px!important;
+  box-sizing:border-box!important;
+  text-align:center!important;
+  color:rgba(255,255,255,.72)!important;
+  font-size:13.5px!important;
+  line-height:1.6!important;
+}
+body.phone-shell #search-results .mr-search-retry-title{
+  color:rgba(255,255,255,.82)!important;
+  font-size:14px!important;
+}
+body.phone-shell #search-results .mr-search-retry-sub{
+  color:rgba(255,255,255,.38)!important;
+  font-size:11.5px!important;
+}
+body.phone-shell #search-results .mr-search-retry-btn{
+  -webkit-appearance:none!important;
+  appearance:none!important;
+  margin-top:2px!important;
+  padding:9px 22px!important;
+  border-radius:12px!important;
+  border:1px solid rgba(210,244,241,.30)!important;
+  background:rgba(10,16,18,.62)!important;
+  color:rgba(210,244,241,.92)!important;
+  font-size:13.5px!important;
+  line-height:1.2!important;
+  cursor:pointer!important;
+  -webkit-tap-highlight-color:transparent!important;
+  transition:background .16s ease,transform .16s ease!important;
+}
+body.phone-shell #search-results .mr-search-retry-btn:active{
+  background:rgba(210,244,241,.16)!important;
+  transform:scale(.97)!important;
+}
+
+/* 慢网络中间态（4s 还没歌，但请求仍在途）：不判空，给「仍在搜索 + 重试」 */
+body.phone-shell #search-results .search-empty.mr-search-slow{
+  display:flex!important;
+  flex-direction:column!important;
+  align-items:center!important;
+  justify-content:center!important;
+  gap:10px!important;
+  padding:34px 20px!important;
+  min-height:150px!important;
+  box-sizing:border-box!important;
+  text-align:center!important;
+  color:rgba(255,255,255,.66)!important;
+  font-size:13px!important;
+  line-height:1.6!important;
+}
+body.phone-shell #search-results .mr-search-slow-text{
+  color:rgba(255,255,255,.72)!important;
+  font-size:13.5px!important;
+}
