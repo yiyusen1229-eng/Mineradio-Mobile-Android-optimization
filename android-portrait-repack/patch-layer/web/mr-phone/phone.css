@@ -2957,6 +2957,16 @@ body.phone-shell #lyric-online-modal .lyric-online-result-row .lyric-online-btn{
   flex:0 0 auto!important;white-space:nowrap!important;
 }
 
+/* ①b 窄屏弹层内的横向滚动条带：它是 flex 子项，overflow 非 visible 时
+   `min-height:auto` 失效 → 在 320 宽（可用高度不足）会被压到 5.8px，
+   40px 的 tab 按钮溢出压住下面的状态行。这里固定不收缩并给回内容高度。 */
+body.phone-shell #home-platform-recommend-mask .home-platform-recommend-tabs{
+  flex:0 0 auto!important;
+  min-height:40px!important;
+  height:auto!important;
+  align-items:center!important;
+}
+
 /* ③ DIY 视觉控制台头部 —— 框里只留居中的「视觉控制台」（小横条已在 LAYOUT 段删除） */
 body.phone-shell #fx-panel .fx-sub{display:none!important;}
 body.phone-shell #fx-panel .fx-head{

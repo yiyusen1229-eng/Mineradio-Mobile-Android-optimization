@@ -90,3 +90,29 @@ V67b（提交 `0f50902`，v67-v69）确实建了自适应体系：
 - 320 宽下收藏键仍按既有设计隐藏（`@media (max-width:340px)`），若要 7 键全保需另设计次级菜单
 - 触摸目标在 375 为 39.4px、320 为 36px（低于 40px 通用建议），如要严格 ≥40 需改为「窄屏减键」方案
 - 字号下限 <10px 的小标签（v91 遗留，约 58 处）未在本轮处理
+
+---
+
+# 附录：v105b（320 窄屏弹层塌陷修复）
+
+v105 交付后，用新写的 `panel-audit-v105.js` 把审计范围从「底栏」扩到「所有弹层/面板」，在 320 宽发现一处真问题：
+
+| 项目 | 改前（v105） | 改后（v105b） |
+|---|---|---|
+| `.home-platform-recommend-tabs` 高度（320×568） | **5.8px** | **40px** |
+| tab 按钮高度 | 40px（溢出容器，压住状态行 34px） | 40px（在容器内） |
+| 按钮底 ↔ 状态行顶 | 重叠 −34px | 间隙 **+13px** |
+| 横向滚动能力 | scrollW 357 / clientW 287（可滚） | 不变 |
+
+**根因**：该 tab 条既是 flex 子项、又带 `overflow-x:auto`。按 CSS 规范，overflow 非 `visible` 时 flex item 的自动最小尺寸（`min-height:auto`）失效 → 弹层内容在 320×568 高度不足时把这一行压到 5.8px。
+
+**修法**（phone.css v105 段 ①b）：
+```css
+body.phone-shell #home-platform-recommend-mask .home-platform-recommend-tabs{
+  flex:0 0 auto!important; min-height:40px!important; height:auto!important; align-items:center!important;
+}
+```
+
+**验证**：v105b APK 装机后 CDP 实测 320×568 与 375×800；`panel-audit-v105.js` 在 320/360/375/393/430 × 歌单/平台推荐/今日聆听/播放控制台/导入 共 25 组全部 `FLAGGED=0`；底栏矩阵仍全在栏内；回归 23/23 PASS ×2（一次「双击回正」误触 Wallpaper Engine 提示属已知偶发）。
+
+**产物**：`Mineradio竖屏-v105b-自适应布局.apk`（75,972,415 B，SHA256 `688DBCAC7D3208CDBE0A372EB49DFF4DD66767B86F45F4033780421C3A441162`）。
