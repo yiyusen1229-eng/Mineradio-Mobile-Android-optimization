@@ -136,3 +136,19 @@ cd "E:\IDM下载目录\DSH工作产生文件\_tmp\verify2"; .\check-all.ps1
 - 可滚动祖先内的越界不计（横向滚动条带本来就是可滚的）
 - 装饰性满幅元素（`#album-bg*`、hero 图、video/canvas）与瞬时通知（`source-fallback`/`toast`/`leaving`）不计
 - `opacity` 不继承 → 显隐判断要爬祖先链（否则隐藏 4UI 行的子元素会被误判为越界）
+
+
+---
+
+# 附录二：v105d / v105e（酷狗注音 + 网络渐进渲染）
+
+## v105d 酷狗日文歌注音
+- 实测酷狗 10 个歌词候选：只有 `[kana:]` 逐字假名读音（+ 部分 `[language:]` 中文翻译），**没有 roma 字段、没有空格分隔的罗马音行** → 空格是酷狗客户端按音节切分生成的，我们复刻同样规则。
+- 实现：搜官方日语歌词（多关键词/带不带 hash）→ 解析 `[kana:]`（分隔符 `1` 只在括号外切）→ 首个带时间戳读音做锚点对齐 → 汉字/々 逐字读音 → Hepburn 按音节空格输出（拗音/促音/ー/ん/：）→ 写进现有 `mr-lyric-roma-v3` 管线。
+- 真机验证（酷狗《さよならのこと》）：点「音」后双行显示 `wa su re ra re na i mu ja ki na ko e i ma mo i ro a se zu ni`，31 行注音全部命中；离线校验 45 句读音组 97/97、缺读音 0、残留汉字 0。
+- 截图：`v105e-罗马音-播放页.png`、`v105e-罗马音-按钮激活.png`。
+
+## v105e 网络渐进渲染
+- 首页发现区：宿主只等 `/api/discover/home` 聚合；补丁并行追加热电台 `/api/podcast/hot`、我的歌单 `/api/user/playlists`，谁先回先渲染对应板块，聚合回来再整体覆盖。
+- 平台推荐面板：打开即并行预取 qishui/kugou/ytm/bodian/qq 五个源，各源到货即渲染自己的 tab（切换 tab 不再等 5~17s）。
+- 真机：两个补丁标志均生效（`__mrProgressiveHomePatched=1`、`__mrPlatformFeedsPatched=1`），热缓存下发现区 14ms、平台各源 36ms；回归 23/23 PASS。
